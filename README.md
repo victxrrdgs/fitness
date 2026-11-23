@@ -15,6 +15,9 @@ Abra `index.html` por um servidor local (`python -m http.server` na pasta) e, pa
 - **Check-in**: prova do treino com foto (até 2), atividade, duração, calorias, km, onde treinou e comentário. Conta como treino feito no dia e entra nos desafios ativos
   - **Android / Samsung Health**: no resumo do treino, *Compartilhar → Fôlego* abre o check-in com a imagem (e tempo/calorias, se vierem no texto). Precisa do app instalado pelo Chrome
   - **iPhone / Apple Saúde**: anexe o print do treino, ou use um atalho (app Atalhos) que abra `https://victxrrdgs.github.io/fitness/?acao=checkin&min=45&kcal=320&km=5.2&tipo=Corrida&fonte=apple`
+- **Placar do dia (0 a 100)**, cada um contra o próprio objetivo (emagrecer, manter, ganhar massa): alimentação 35 (calorias na faixa, proteína, qualidade), treino 25, cardio 15, água 10, bônus 15 (sono, dia sem álcool, passos, refeições registradas). Cada categoria tem teto e curva; +10% se todas as quatro principais passarem da metade
+- **Juntos → Placar**: duelo do dia, melhor refeição de cada um, rodada semanal (segunda a domingo) e troféus. Desafios podem ser por **pontos**
+- **Comer**: registrar o que comeu por **código de barras** (Open Food Facts; no iPhone usa a biblioteca ZXing), **busca na TACO** com medidas caseiras do IBGE, ou **manual**. Cada refeição ganha nota de 0 a 10 com os motivos. Metas calculadas em *Perfil → Meu objetivo* (Mifflin-St Jeor) ou os números da nutricionista
 - **Ofensiva** conta a partir de 24/11/2026 (`INICIO_OFENSIVA` em `calc.js`); antes disso nada conta como falha
 - **Progresso**: calendário do mês, peso (privado), recordes e gráfico por exercício
 - **Plano**: cole o treino e a dieta em texto simples (formato em *Plano → Editar → Como escrever*) ou **importe de um arquivo** (PDF, Word .docx, Excel .xlsx, CSV ou texto). O app preenche os campos e você confere antes de salvar.
@@ -36,6 +39,8 @@ plano, preferências e peso são privados; o perfil (nome, ofensiva) e o registr
 - `store.js` — Firebase ou modo local
 - `importar.js` — leitura de PDF/Word/Excel e conversão para o formato do plano (carregado só ao importar)
 - `vendor/pdfjs/` — pdf.js 6.5.438 (Mozilla, Apache 2.0)
+- `comida.js` — busca TACO, Open Food Facts e leitura do código de barras (carregado só ao registrar comida)
+- `dados/taco.json` — TACO 4ª ed. (NEPA/UNICAMP, 2011; reprodução permitida citando a fonte) e medidas caseiras do IBGE POF 2008-2009, extraídas de [taco-br-mcp](https://github.com/ianhudsonai/taco-br-mcp) (MIT)
 - `sw.js`, `manifest.webmanifest`, `icons/` — instalação como app
 - `firestore.rules` — regras de segurança
 - `PLANO.md` — plano de desenvolvimento e decisões

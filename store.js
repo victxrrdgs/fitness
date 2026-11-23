@@ -57,7 +57,8 @@ function criarStoreLocal() {
   };
   const filtrar = (lista, onde) => (!onde ? lista
     : onde[1] === 'array-contains' ? lista.filter((x) => (x[onde[0]] || []).includes(onde[2]))
-      : lista.filter((x) => x[onde[0]] === onde[2]));
+      : onde[1] === '>=' ? lista.filter((x) => x[onde[0]] >= onde[2])
+        : lista.filter((x) => x[onde[0]] === onde[2]));
 
   return {
     local: true,

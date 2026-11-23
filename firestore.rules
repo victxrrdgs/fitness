@@ -32,8 +32,8 @@ service cloud.firestore {
 
     // Registro do dia, fotos das refeições e check-ins: o dono grava, a dupla lê e reage.
     match /feed/{uid}/{colecao}/{docId} {
-      allow read: if (eu(uid) || parceiroDe(uid)) && colecao in ['dias', 'fotos', 'checkins'];
-      allow write: if eu(uid) && colecao in ['dias', 'fotos', 'checkins'];
+      allow read: if (eu(uid) || parceiroDe(uid)) && colecao in ['dias', 'fotos', 'checkins', 'comidas'];
+      allow write: if eu(uid) && colecao in ['dias', 'fotos', 'checkins', 'comidas'];
       allow update: if colecao == 'dias' && parceiroDe(uid) && mudou().hasOnly(['reacoes']);
     }
 
@@ -90,13 +90,13 @@ service cloud.firestore {
       // Check-ins (sem foto) e fotos: cada um grava os seus; os membros leem e reagem.
       match /{colecao}/{cid} {
         function membroD() { return logado() && request.auth.uid in get(/databases/$(database)/documents/desafios/$(id)).data.membros; }
-        allow read: if membroD() && colecao in ['checkins', 'fotos'];
-        allow create: if membroD() && colecao in ['checkins', 'fotos'] && request.resource.data.uid == request.auth.uid;
-        allow update: if membroD() && colecao in ['checkins', 'fotos'] && (
+        allow read: if membroD() && colecao in ['checkins', 'fotos', 'pontos'];
+        allow create: if membroD() && colecao in ['checkins', 'fotos', 'pontos'] && request.resource.data.uid == request.auth.uid;
+        allow update: if membroD() && colecao in ['checkins', 'fotos', 'pontos'] && (
           (resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid)
           || (colecao == 'checkins' && mudou().hasOnly(['reacoes'])
               && request.resource.data.get('reacoes', {}).diff(resource.data.get('reacoes', {})).affectedKeys().hasOnly([request.auth.uid])));
-        allow delete: if logado() && colecao in ['checkins', 'fotos'] && resource.data.uid == request.auth.uid;
+        allow delete: if logado() && colecao in ['checkins', 'fotos', 'pontos'] && resource.data.uid == request.auth.uid;
       }
     }
 

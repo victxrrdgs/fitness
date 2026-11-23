@@ -573,3 +573,79 @@ form label small { color: var(--faint); }
 .ck-nota { font-size: .86rem; margin-top: 8px; line-height: 1.45; }
 .ck .reacoes { margin-top: 12px; }
 .reacoes button small { font-size: .72rem; color: var(--muted); margin-left: 2px; }
+
+/* Placar do dia */
+.placar { display: block; width: 100%; text-align: left; border-radius: var(--r); padding: 16px 18px; margin-bottom: 14px; position: relative; overflow: hidden; }
+.placar::before { content: ''; position: absolute; width: 220px; height: 220px; left: -90px; top: -120px; border-radius: 50%; background: radial-gradient(circle, rgba(198, 244, 50, .18), transparent 70%); pointer-events: none; }
+.pl-top { display: flex; align-items: center; gap: 12px; position: relative; }
+.pl-top .info { flex: 1; }
+.pl-top .lbl { color: var(--muted); font-size: .8rem; }
+.pl-top .eq { color: var(--lime); }
+.pl-n { font-size: 2.6rem; font-weight: 800; letter-spacing: -.05em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.pl-n small { font-size: .9rem; color: var(--faint); font-weight: 600; letter-spacing: 0; margin-left: 2px; }
+.pl-rivais { display: flex; align-items: center; gap: 8px; }
+.pl-rivais > small { color: var(--faint); font-size: .75rem; }
+.pl-rival { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.pl-rival .avatar { width: 34px; height: 34px; font-size: .8rem; }
+.pl-rival b { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.pl-cats { margin-top: 12px; display: grid; gap: 7px; position: relative; }
+.pl-cat { display: grid; grid-template-columns: 112px 1fr 46px; align-items: center; gap: 8px; font-size: .76rem; color: var(--muted); }
+.pl-cat .barra { margin-top: 0; height: 6px; }
+.pl-cat b { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; font-size: .8rem; }
+.pl-cat b small { color: var(--faint); font-weight: 500; }
+.stepper { display: flex; align-items: center; gap: 10px; }
+.stepper button { width: 34px; height: 34px; border-radius: 50%; background: rgba(255, 255, 255, .08); border: 1px solid var(--stroke); font-size: 1.1rem; }
+.stepper button:disabled { opacity: .35; }
+.stepper b { min-width: 54px; text-align: center; font-variant-numeric: tabular-nums; font-size: .9rem; }
+.nota-b { font-size: .78rem; font-weight: 700; padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
+.nota-b.boa { background: rgba(198, 244, 50, .18); color: var(--lime); }
+.nota-b.media { background: rgba(251, 191, 36, .16); color: var(--amber); }
+.nota-b.ruim { background: rgba(251, 113, 133, .16); color: var(--red); }
+.ultra { color: var(--red); }
+
+/* Comer */
+.macros { display: grid; gap: 10px; }
+.macro .mh { display: flex; justify-content: space-between; font-size: .8rem; color: var(--muted); }
+.macro .mh b { color: var(--text); font-variant-numeric: tabular-nums; }
+.macro .mh small { color: var(--faint); font-weight: 500; }
+.macro .barra { margin-top: 5px; height: 6px; }
+.macro.mc .barra > div { background: linear-gradient(90deg, #38bdf8, #7dd3fc); }
+.macro.mg .barra > div { background: linear-gradient(90deg, #fbbf24, #fb923c); }
+.acao-grid.tres { grid-template-columns: 1fr 1fr 1fr; margin-top: 14px; }
+.acao-grid.tres button { padding: 14px 10px; gap: 6px; }
+.acao-grid.tres button span { font-size: 1.3rem; }
+.acao-grid.tres button b { font-size: .82rem; }
+.acao-grid.tres button small { margin-top: -2px; font-size: .68rem; }
+.grupo-vazio { display: flex; width: 100%; align-items: center; gap: 10px; padding: 12px 14px; margin-top: 10px; border-radius: 18px; border: 1px dashed var(--stroke-hi); color: var(--muted); font-size: .88rem; text-align: left; }
+.grupo-vazio span { width: 40px; color: var(--faint); font-size: .75rem; }
+.grupo-vazio i { margin-left: auto; font-style: normal; color: var(--accent); font-size: .8rem; font-weight: 600; }
+.grupo .sec-h small { color: var(--faint); font-size: .75rem; font-weight: 500; }
+.motivos { color: var(--muted); font-size: .76rem; margin: -4px 4px 8px; line-height: 1.4; }
+.resultados { margin-top: 10px; max-height: 50vh; overflow: auto; border-radius: 18px; }
+.resultados .row + .row { border-top: 1px solid var(--stroke); }
+.al-nome { display: flex; flex-direction: column; gap: 3px; padding: 4px 2px 6px; }
+.al-nome b { font-size: 1.05rem; }
+.al-nome small { color: var(--muted); font-size: .78rem; }
+.chip small { color: var(--faint); margin-left: 3px; }
+.chip.on { background: rgba(198, 244, 50, .16); border-color: rgba(198, 244, 50, .55); color: var(--text); }
+
+/* Juntos: duelo */
+.duelo { border-radius: var(--r); padding: 18px; margin-top: 14px; }
+.duelo .lbl { color: var(--muted); font-size: .8rem; text-align: center; }
+.duelo-lados { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; }
+.duelo .lado { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 6px; border-radius: 20px; }
+.duelo .lado.lider { background: rgba(198, 244, 50, .08); box-shadow: inset 0 0 0 1px rgba(198, 244, 50, .3); }
+.duelo .lado .avatar { width: 48px; height: 48px; }
+.duelo .lado small { color: var(--muted); font-size: .72rem; }
+.duelo .vs { color: var(--faint); font-size: 1.3rem; font-weight: 700; }
+.duelo-cats { margin-top: 14px; display: grid; gap: 8px; }
+.dc { display: grid; grid-template-columns: 112px 1fr; gap: 10px; align-items: center; font-size: .76rem; color: var(--muted); }
+.dc-b { display: flex; flex-direction: column; gap: 3px; }
+.dc i { display: block; height: 6px; border-radius: 99px; background: rgba(255, 255, 255, .08); position: relative; overflow: hidden; }
+.dc i::after { content: ''; position: absolute; inset: 0; width: var(--w); border-radius: 99px; background: linear-gradient(90deg, #4ade80, #c6f432); }
+.dc i + i::after { background: linear-gradient(90deg, #fb923c, #ffd166); }
+.rodada { width: 100%; border-collapse: collapse; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.rodada th { color: var(--muted); font-weight: 600; font-size: .78rem; padding: 4px; text-align: center; }
+.rodada td { padding: 5px 4px; text-align: center; border-top: 1px solid var(--stroke); }
+.rodada td:first-child { text-align: left; color: var(--muted); text-transform: capitalize; }
+.rodada tr.tot td { font-weight: 700; color: var(--text); }

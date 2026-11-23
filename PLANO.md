@@ -24,6 +24,10 @@ Projeto separado do `financas`, mas com a mesma base: HTML/JS puro, GitHub Pages
 - [x] Desafios estilo GymRats (placar por dias ou minutos, feed com fotos, reações, código de entrada)
 - [x] Check-in com foto, duração, local, calorias e km; compartilhar do Samsung Health (Android) e link para Atalhos (iPhone)
 - [x] Ofensiva começa em 24/11/2026 (dia 23 foi de teste)
+- [x] Placar do dia (0-100) por objetivo, duelo, rodada semanal, troféus, desafio por pontos
+- [x] Aba Comer: código de barras (Open Food Facts), TACO com medidas caseiras, manual; nota por refeição
+- [ ] IA (Claude) para foto do prato e texto livre: via Apps Script com a chave guardada lá (o usuário decidiu esperar; custo estimado ~R$ 8 a 40/mês)
+- [ ] Conquistas (7 dias batendo proteína etc.) e "coringa" semanal
 - [ ] Leitura automática do Samsung Health / Apple Saúde (sem foto): via Strava (API + Apps Script) ou atalho do iPhone pronto
 - [ ] Comentários nos check-ins dos desafios
 - [ ] Modelo do arquivo real do plano dela (a partir do primeiro arquivo, em `MODELOS`)

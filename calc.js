@@ -239,15 +239,20 @@ export function statusDesafio(d, h = hoje()) {
   return { fase: 'ativo', total, dia: difDias(d.inicio, h) + 1, restam: difDias(h, d.fim) };
 }
 
-export function placarDesafio(d, checkins) {
-  const por = Object.fromEntries((d.membros || []).map((u) => [u, { uid: u, dias: new Set(), minutos: 0, checkins: 0 }]));
+// pontosDocs: [{ uid, dias: { 'AAAA-MM-DD': total } }] (critério "pontos": soma do Placar do dia)
+export function placarDesafio(d, checkins, pontosDocs = []) {
+  const por = Object.fromEntries((d.membros || []).map((u) => [u, { uid: u, dias: new Set(), minutos: 0, checkins: 0, fol: 0 }]));
   for (const c of checkins) {
     if (!c.data || c.data < d.inicio || c.data > d.fim) continue;
-    const p = por[c.uid] ||= { uid: c.uid, dias: new Set(), minutos: 0, checkins: 0, saiu: true };
+    const p = por[c.uid] ||= { uid: c.uid, dias: new Set(), minutos: 0, checkins: 0, fol: 0, saiu: true };
     p.dias.add(c.data); p.minutos += Number(c.minutos) || 0; p.checkins++;
   }
-  const lista = Object.values(por).map((p) => ({ ...p, dias: p.dias.size, pontos: d.criterio === 'minutos' ? p.minutos : p.dias.size }));
-  lista.sort((a, b) => b.pontos - a.pontos || (d.criterio === 'minutos' ? b.dias - a.dias : b.minutos - a.minutos));
+  for (const doc of pontosDocs) {
+    const p = por[doc.uid] ||= { uid: doc.uid, dias: new Set(), minutos: 0, checkins: 0, fol: 0, saiu: true };
+    for (const [dt, v] of Object.entries(doc.dias || {})) if (dt >= d.inicio && dt <= d.fim && dt <= hoje()) p.fol += Number(v) || 0;
+  }
+  const lista = Object.values(por).map((p) => ({ ...p, dias: p.dias.size, pontos: d.criterio === 'minutos' ? p.minutos : d.criterio === 'pontos' ? p.fol : p.dias.size }));
+  lista.sort((a, b) => b.pontos - a.pontos || b.dias - a.dias || b.minutos - a.minutos);
   // Empate divide a posição
   lista.forEach((p, i) => { p.pos = i && lista[i - 1].pontos === p.pontos ? lista[i - 1].pos : i + 1; });
   return lista;
@@ -287,6 +292,143 @@ export const TIPOS = [
   { id: 'outro', nome: 'Outro', e: '✨', chaves: /(?!)/ },
 ];
 export const tipoInfo = (id) => TIPOS.find((x) => x.id === id) || TIPOS.at(-1);
+
+// ---------------- Metas pelo objetivo ----------------
+// Cada pessoa é comparada com o próprio objetivo: quem quer emagrecer e quem quer ganhar massa
+// têm metas diferentes, e a nota é "o quanto você se alinhou ao seu objetivo".
+export const OBJETIVOS = { emagrecer: 'Emagrecer', manter: 'Manter / definir', ganhar: 'Ganhar massa' };
+export const ATIVIDADE = { sedentario: [1.2, 'Sedentário'], leve: [1.375, 'Leve (1 a 3x por semana)'], moderado: [1.55, 'Moderado (3 a 5x)'], intenso: [1.725, 'Intenso (6 a 7x)'] };
+const lim = (x, a, b) => Math.min(b, Math.max(a, x));
+const r1 = (x) => Math.round(x * 10) / 10;
+
+export function calcularMetas(corpo = {}, pesoAtual = null) {
+  const kg = Number(pesoAtual || corpo.peso) || 0, cm = Number(corpo.altura) || 0, idade = Number(corpo.idade) || 0;
+  const objetivo = OBJETIVOS[corpo.objetivo] ? corpo.objetivo : 'manter';
+  let kcal = null, tmb = null;
+  if (kg && cm && idade) {
+    // Mifflin-St Jeor
+    tmb = 10 * kg + 6.25 * cm - 5 * idade + (corpo.sexo === 'f' ? -161 : 5);
+    const gasto = tmb * (ATIVIDADE[corpo.atividade]?.[0] || 1.375);
+    kcal = Math.round((objetivo === 'emagrecer' ? Math.max(tmb * 1.05, gasto - 500) : objetivo === 'ganhar' ? gasto + 300 : gasto) / 10) * 10;
+  }
+  const prot = kg ? Math.round(kg * (objetivo === 'manter' ? 1.6 : 2)) : null;
+  const k = Number(corpo.kcalManual) || kcal, p = Number(corpo.protManual) || prot;
+  return {
+    objetivo, completo: !!(k && p), tmb: tmb && Math.round(tmb),
+    kcal: k || 2000, prot: p || 110,
+    gord: Math.round(((k || 2000) * 0.28) / 9),
+    carb: Math.round(((k || 2000) - (p || 110) * 4 - (k || 2000) * 0.28) / 4),
+    refeicoes: Number(corpo.refeicoes) || 5,
+    cardioSemana: Number(corpo.cardioSemana) || 150,
+    sono: Number(corpo.sono) || 7,
+  };
+}
+
+// ---------------- Comida ----------------
+// Item registrado: { kcal, p, cb, g, f (fibra), nova (1 natural … 4 ultraprocessado) } já na quantidade comida.
+export function somarItens(itens) {
+  const t = { kcal: 0, p: 0, cb: 0, g: 0, f: 0 };
+  for (const i of itens) for (const k of Object.keys(t)) t[k] += Number(i[k]) || 0;
+  return Object.fromEntries(Object.entries(t).map(([k, v]) => [k, r1(v)]));
+}
+
+export const NOVA = { 1: 'In natura', 2: 'Ingrediente culinário', 3: 'Processado', 4: 'Ultraprocessado' };
+const NOVA_NOTA = { 1: 10, 2: 9, 3: 6, 4: 2 };
+
+// NOVA aproximado para os alimentos da TACO (pela categoria e pelo nome).
+export function novaTaco(nome, cat) {
+  const n = nome.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  if (/salsicha|linguica|mortadela|presunto|salame|apresuntado|hamburguer|nuggets|bacon|empanad|biscoito|bolacha|refrigerante|achocolatado|bebida lactea|iogurte, sabor|margarina|maionese|ketchup|salgadinho|macarrao instantaneo|sorvete|chocolate|bala|pirulito|gelatina|cereal matinal|barra de cereal|pao, de forma|bisnaguinha|pizza|lasanha|refresco|po para/.test(n)) return 4;
+  if (/^pao|queijo|cerveja|vinho|cachaca|doce de|geleia|compota|conserva|enlatad|defumad|seco|charque|bolo|torrada|requeijao|creme de leite|leite condensado/.test(n)) return 3;
+  if (/oleo|azeite|manteiga|acucar|mel\b|sal\b|banha/.test(n)) return 2;
+  if (/industrializados|acucarados/i.test(cat)) return 4;
+  if (/preparados|miscelaneas/i.test(cat.normalize('NFD').replace(/[̀-ͯ]/g, ''))) return 3;
+  return 1;
+}
+
+// Nota da refeição (0 a 10) para o objetivo da pessoa, com os motivos.
+export function notaRefeicao(itens, m) {
+  if (!itens.length) return null;
+  const t = somarItens(itens);
+  const alvoK = m.kcal / m.refeicoes, alvoP = m.prot / m.refeicoes;
+  const r = t.kcal / alvoK;
+  const [ini, fim, queda] = { emagrecer: [0.5, 1, 14], manter: [0.6, 1.15, 10], ganhar: [0.8, 1.45, 7] }[m.objetivo];
+  const nK = lim(r < ini ? 10 - (ini - r) * 8 : r <= fim ? 10 : 10 - (r - fim) * queda, 0, 10);
+  const nP = lim((10 * t.p) / (alvoP * 0.8), 0, 10);
+  let soma = 0, peso = 0;
+  for (const i of itens) { const w = Math.max(5, Number(i.kcal) || 0); soma += (NOVA_NOTA[i.nova] ?? 6) * w; peso += w; }
+  const nQ = lim(soma / peso + (t.f >= 6 ? 1 : 0), 0, 10);
+  const [wK, wP, wQ] = { emagrecer: [0.45, 0.3, 0.25], manter: [0.35, 0.3, 0.35], ganhar: [0.35, 0.45, 0.2] }[m.objetivo];
+  const nota = r1(nK * wK + nP * wP + nQ * wQ);
+  const motivos = [];
+  if (r > fim) motivos.push(`${Math.round((r - 1) * 100)}% acima das calorias ideais por refeição${m.objetivo === 'emagrecer' ? ' para emagrecer' : ''}`);
+  else if (r < ini) motivos.push(m.objetivo === 'ganhar' ? 'pouca comida para ganhar massa' : 'refeição leve');
+  else motivos.push('calorias na medida');
+  motivos.push(t.p >= alvoP * 0.8 ? `boa proteína (${Math.round(t.p)} g)` : `pouca proteína (${Math.round(t.p)} g de ~${Math.round(alvoP)} g)`);
+  const ultra = itens.filter((i) => i.nova === 4);
+  if (ultra.length) motivos.push(`ultraprocessado: ${ultra.map((i) => i.nome.split(',')[0]).slice(0, 2).join(', ')}`);
+  else if (nQ >= 9) motivos.push('comida de verdade');
+  if (t.f >= 6) motivos.push('rica em fibras');
+  return { nota, ...t, motivos };
+}
+
+// ---------------- Placar do dia (0 a 100) ----------------
+// Cada categoria tem teto, os primeiros 70% de cada meta valem mais que o finalzinho
+// (curva), e quem cumpre pelo menos metade de todas as categorias ganha +10%.
+export const PESOS = { alimentacao: 35, treino: 25, cardio: 15, agua: 10, bonus: 15 };
+export const PESOS_NOME = { alimentacao: '🍽️ Alimentação', treino: '🏋️ Treino', cardio: '🏃 Cardio', agua: '💧 Água', bonus: '😴 Bônus' };
+export const TIPOS_CARDIO = ['corrida', 'caminhada', 'bike', 'natacao', 'funcional', 'esporte'];
+const curva = (x) => Math.pow(lim(x, 0, 1), 0.7);
+
+function pontosKcal(kcal, m) {
+  const d = (kcal - m.kcal) / m.kcal;
+  const [a, b] = { emagrecer: [-0.25, 0.05], manter: [-0.1, 0.1], ganhar: [-0.05, 0.15] }[m.objetivo];
+  const fora = d < a ? a - d : d > b ? d - b : 0;
+  return 15 * lim(1 - fora / 0.35, 0, 1);
+}
+
+// ctx: { m (metas), comidas, av (avaliarDia), dia (registro), checkins, metaAgua }
+export function pontosDia({ m, comidas = [], av = {}, dia = {}, checkins = [], metaAgua = 2500 }) {
+  const c = {};
+  const dicas = [];
+  // Alimentação
+  const grupos = {};
+  for (const i of comidas) (grupos[i.grupo || 'outro'] ||= []).push(i);
+  const notas = Object.entries(grupos).map(([g, it]) => ({ grupo: g, nome: it[0].grupoNome || g, ...notaRefeicao(it, m) }));
+  if (comidas.length) {
+    const t = somarItens(comidas);
+    const mediaNota = notas.reduce((a, x) => a + x.nota * x.kcal, 0) / Math.max(1, notas.reduce((a, x) => a + x.kcal, 0));
+    c.alimentacao = pontosKcal(t.kcal, m) + 10 * curva(t.p / m.prot) + mediaNota;
+    if (t.p < m.prot * 0.9) dicas.push(`Faltam ~${Math.round(m.prot - t.p)} g de proteína para a meta.`);
+    if (t.kcal < m.kcal * 0.75) dicas.push(`Ainda cabem ~${Math.round(m.kcal - t.kcal)} kcal hoje.`);
+  } else if (av.total) {
+    c.alimentacao = PESOS.alimentacao * 0.7 * (av.feitas / av.total);
+    dicas.push('Registre o que comeu na aba Comer: sem registro, a alimentação vale no máximo 70%.');
+  } else {
+    c.alimentacao = 0;
+    dicas.push('Registre o que comeu na aba Comer.');
+  }
+  // Treino: check-in ou treino do plano feito vale tudo; dia de descanso planejado vale 60%.
+  if (dia.treinoFeito || checkins.length) c.treino = PESOS.treino;
+  else if (av.temTreino) { c.treino = PESOS.treino * 0.6 * (av.progressoTreino || 0); dicas.push('Treino do dia ainda não foi feito.'); } else c.treino = PESOS.treino * 0.6;
+  // Cardio: meta da semana dividida pelos dias
+  const minCardio = checkins.filter((x) => TIPOS_CARDIO.includes(x.tipo)).reduce((a, x) => a + (Number(x.minutos) || 0), 0) + (Number(dia.cardioMin) || 0);
+  const alvoCardio = m.cardioSemana / 7;
+  c.cardio = PESOS.cardio * curva(minCardio / alvoCardio);
+  if (minCardio < alvoCardio) dicas.push(`Cardio: ${Math.round(minCardio)} de ~${Math.round(alvoCardio)} min hoje.`);
+  // Água
+  c.agua = PESOS.agua * curva((Number(dia.agua) || 0) / metaAgua);
+  // Bônus: sono, dia sem álcool, passos, refeições registradas
+  const sono = Number(dia.sono) || 0, passos = Number(dia.passos) || 0;
+  c.bonus = (sono >= m.sono ? 6 : sono >= m.sono - 1 ? 3 : 0) + (dia.semAlcool ? 3 : 0) + (passos >= 8000 ? 3 : passos >= 5000 ? 1.5 : 0) + (Object.keys(grupos).length >= 3 ? 3 : 0);
+  const base = Object.values(c).reduce((a, b) => a + b, 0);
+  const equilibrio = ['alimentacao', 'treino', 'cardio', 'agua'].every((k) => c[k] >= PESOS[k] * 0.5);
+  const total = Math.round(Math.min(100, base * (equilibrio ? 1.1 : 1)));
+  return { total, cats: Object.fromEntries(Object.entries(c).map(([k, v]) => [k, r1(v)])), equilibrio, notas, minCardio, dicas };
+}
+
+// Rodadas semanais (segunda a domingo) a partir dos pontos de cada dia.
+export const inicioSemana = (s) => somarDias(s, -((diaSemana(s) + 6) % 7));
 
 // ---------------- Treino: histórico e recordes ----------------
 const seriesOk = (dia, exId) => ((dia?.series || {})[exId] || []).filter((s) => s && s.ok && (Number(s.kg) > 0 || Number(s.reps) > 0));
