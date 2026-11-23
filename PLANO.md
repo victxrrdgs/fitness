@@ -19,8 +19,11 @@ Projeto separado do `financas`, mas com a mesma base: HTML/JS puro, GitHub Pages
 - [x] 1. Plano: importar treino e dieta por texto (formato em `calc.js`: `lerTreino`, `lerDieta`)
 - [x] 2. Dupla: código de convite, ofensiva compartilhada, feed do dia do parceiro, reações, cutucar
 - [x] 3. Progresso: calendário, peso, recordes e gráfico por exercício
-- [ ] Publicar: Firebase + GitHub Pages (passos abaixo) e testar com as duas contas reais
-- [ ] Colar o plano real dela (e o dele) no app
+- [x] Publicar: Firebase (`folego-c33b7`) + GitHub Pages (`main`, raiz)
+- [x] Importar plano de arquivo (PDF, Word, Excel, CSV, texto) — `importar.js`
+- [ ] Modelo do arquivo real do plano dela (a partir do primeiro arquivo, em `MODELOS`)
+- [ ] Testar a dupla com as duas contas reais
+- [ ] Colar/importar o plano real dela (e o dele) no app
 - [ ] 4. Lembretes (bot do Telegram e/ou notificação)
 - [ ] 5. Opcionais: calorias (TACO + Open Food Facts), foto com IA, APK
 
@@ -31,4 +34,5 @@ Projeto separado do `financas`, mas com a mesma base: HTML/JS puro, GitHub Pages
 
 ## Testado
 Fluxo completo no modo local (Chromium, tela de celular, duas abas): plano de exemplo → refeições → treino com cargas → dia cumprido → código de dupla → reação e cutucada. Sem erros no console.
-Ainda não testado com o Firebase de verdade (falta criar o projeto).
+Publicado e com login Google funcionando no Firebase real.
+Importação testada com PDF (inclusive tabela de exercícios), Word com tabela e Excel com várias abas.

@@ -12,7 +12,7 @@ Abra `index.html` por um servidor local (`python -m http.server` na pasta) e, pa
 - **Ofensiva**: ❄️ congelamento (começa com 1, +1 toda segunda, máx. 2) segura a sequência num dia ruim
 - **Dupla** (até 5 pessoas): código de convite, ofensiva compartilhada, tira de 14 dias, dia do parceiro com fotos, reações e cutucar
 - **Progresso**: calendário do mês, peso (privado), recordes e gráfico por exercício
-- **Plano**: cole o treino e a dieta em texto simples (formato em *Plano → Editar → Como escrever*)
+- **Plano**: cole o treino e a dieta em texto simples (formato em *Plano → Editar → Como escrever*) ou **importe de um arquivo** (PDF, Word .docx, Excel .xlsx, CSV ou texto). O app preenche os campos e você confere antes de salvar.
 - Funciona offline e pode ser instalado no celular
 
 ## Publicar
@@ -29,6 +29,8 @@ plano, preferências e peso são privados; o perfil (nome, ofensiva) e o registr
 - `index.html`, `styles.css`, `app.js` — interface
 - `calc.js` — regras (leitura do plano, dia cumprido, ofensiva, recordes)
 - `store.js` — Firebase ou modo local
+- `importar.js` — leitura de PDF/Word/Excel e conversão para o formato do plano (carregado só ao importar)
+- `vendor/pdfjs/` — pdf.js 6.5.438 (Mozilla, Apache 2.0)
 - `sw.js`, `manifest.webmanifest`, `icons/` — instalação como app
 - `firestore.rules` — regras de segurança
 - `PLANO.md` — plano de desenvolvimento e decisões

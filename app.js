@@ -1,7 +1,7 @@
-import { criarStore, modoLocal, CONVITE_MIN } from './store.js?v=0.1';
-import * as C from './calc.js?v=0.1';
+import { criarStore, modoLocal, CONVITE_MIN } from './store.js?v=0.2';
+import * as C from './calc.js?v=0.2';
 
-const VERSAO = '0.1';
+const VERSAO = '0.2';
 const MAX_PARCEIROS = 5;
 const DIAS_EDITAVEIS = 2; // dá para corrigir até anteontem
 const JANELA_MAPA = 60; // dias publicados no perfil para a dupla
@@ -708,6 +708,8 @@ function modalPlano() {
       <b>Treino</b>: uma linha <code>TREINO A: Nome | seg, qui</code> e depois um exercício por linha, como <code>Supino reto 4x8-10 90s (obs)</code>. Os dias sem treino são descanso.<br><br>
       <b>Dieta</b>: uma refeição por linha, como <code>07:30 Café da manhã: 2 ovos; 1 pão</code>. Linhas começando com <code>-</code> viram itens da refeição de cima.<br><br>
       Dica: peça ao Claude "reescreva meu plano neste formato" e cole aqui.</p></div></details>
+    <label class="btn importar">📄 Importar de arquivo (PDF, Word, Excel)<input type="file" name="arquivo" hidden></label>
+    <div id="importado" class="hidden"></div>
     <label>Treino</label><textarea name="treino" placeholder="TREINO A: Superiores | seg, qui&#10;Supino reto 4x10 90s">${esc(p.treinoTexto || '')}</textarea>
     <label>Dieta</label><textarea name="dieta" placeholder="07:30 Café da manhã: 2 ovos; 1 pão integral">${esc(p.dietaTexto || '')}</textarea>
     <div id="previa" class="aviso"></div>
@@ -729,6 +731,28 @@ function modalPlano() {
       fecharModal(); toast('Plano salvo ✓');
     });
     el.querySelector('[data-a="exemplo-plano"]')?.addEventListener('click', () => { f.treino.value = C.EXEMPLO_TREINO; f.dieta.value = C.EXEMPLO_DIETA; previa(); });
+    import('./importar.js?v=0.2').then((I) => { f.arquivo.accept = I.ACEITA; }).catch(() => {});
+    f.arquivo.addEventListener('change', async () => {
+      const arq = f.arquivo.files[0]; f.arquivo.value = '';
+      if (!arq) return;
+      const box = el.querySelector('#importado');
+      box.className = 'aviso'; box.textContent = `Lendo ${arq.name}…`;
+      try {
+        const I = await import('./importar.js?v=0.2');
+        const linhas = await I.lerArquivo(arq);
+        const r = I.montarPlano(linhas);
+        if (r.treino) f.treino.value = r.treino;
+        if (r.dieta) f.dieta.value = r.dieta;
+        const achou = [r.treino && 'treino', r.dieta && 'dieta'].filter(Boolean).join(' e ');
+        box.innerHTML = (achou
+          ? `✓ Li o <b>${esc(arq.name)}</b> e preenchi ${achou}${r.modelo ? ` (modelo: ${esc(r.modelo)})` : ''}. <b>Confira e ajuste</b> antes de salvar.`
+          : `Não reconheci treino nem dieta em <b>${esc(arq.name)}</b>. O texto do arquivo está abaixo: copie o que precisar para os campos.`)
+          + `<details class="dicas"><summary>Texto do arquivo</summary><textarea class="ta" readonly rows="8">${esc(I.textoOriginal(linhas))}</textarea></details>`;
+        previa();
+      } catch (e) {
+        box.className = 'aviso'; box.textContent = '⚠️ ' + (e.message || 'Não consegui ler o arquivo.');
+      }
+    });
   });
 }
 
