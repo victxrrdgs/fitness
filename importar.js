@@ -1,3 +1,5 @@
+import { slug } from './calc.js?v=0.5';
+
 // Importar plano de arquivo (PDF, Word, Excel, CSV ou texto). Carregado só ao escolher um arquivo.
 // Cada leitor devolve "linhas": listas de células (parágrafo = 1 célula, linha de tabela = várias).
 // Depois montarPlano() separa treino e dieta e escreve no formato que calc.js entende.
@@ -32,14 +34,18 @@ async function lerPdf(buf) {
   pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
   const doc = await pdfjs.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
   const linhas = [];
+  linhas.pdf = []; // pedaços com posição, por página (para modelos que leem colunas)
   for (let n = 1; n <= doc.numPages; n++) {
     const pag = await doc.getPage(n);
     const { items } = await pag.getTextContent();
+    const brutos = [];
+    linhas.pdf.push(brutos);
     // Agrupa os pedaços pela altura (y) e ordena da esquerda para a direita.
     const grupos = [];
     for (const it of items) {
       if (!it.str || !it.str.trim()) continue;
       const x = it.transform[4], y = it.transform[5], alt = Math.abs(it.transform[3]) || 10;
+      brutos.push({ x, y, alt, str: limpar(it.str) });
       let g = grupos.find((k) => Math.abs(k.y - y) < alt * 0.5);
       if (!g) { g = { y, alt, itens: [] }; grupos.push(g); }
       g.itens.push({ x, fim: x + (it.width || 0), str: it.str });
@@ -164,12 +170,24 @@ function cabecalhoTreino(cel) {
   return col.nome >= 0 && (col.series >= 0 || col.reps >= 0) ? col : null;
 }
 
-function linhaDaTabela(cel, col) {
+// "Cardio: 25 a 30 min de escada ou bike" → "Cardio (escada ou bike) 30 min (25 a 30 min)"
+function linhaCardio(t) {
+  const r = t.match(/(\d+)\s*(?:a|-|–)\s*(\d+)\s*min/i) || t.match(/(\d+)()\s*min/i);
+  const desc = t.replace(/^cardio\s*:?\s*/i, '').replace(/\d+\s*(?:(?:a|-|–)\s*\d+\s*)?min(?:utos)?\s*(?:de\s+)?/i, '').trim();
+  return `Cardio${desc ? ` (${desc})` : ''}${r ? ` ${r[2] || r[1]} min` : ''}${r && r[2] ? ` (${r[1]} a ${r[2]} min)` : ''}`;
+}
+
+// descPadrao: [min, max] do "Descanso de 60 a 90 s" do texto (principais com 4+ séries ficam com o maior)
+function linhaDaTabela(cel, col, descPadrao = null) {
   const pega = (i) => (i >= 0 ? cel[i] || '' : '');
   const nome = pega(col.nome);
   if (!nome) return '';
+  if (/^cardio\b/i.test(nome)) return linhaCardio(nome);
   const series = pega(col.series).match(/\d+/)?.[0];
-  const reps = pega(col.reps).replace(/\s*(a|–)\s*/g, '-').replace(/\s*rep[a-zà-ú]*/i, '').replace(/\s+/g, '');
+  // "8 a 10" → 8-10; "30 s" → 30s; "10 cada perna" → 10 (cada perna)
+  const rm = pega(col.reps).replace(/\s*rep[a-zà-ú]*/i, '').match(/^(\d+(?:\s*(?:a|-|–|\/)\s*\d+)?)\s*(s|seg|segundos)?\b\s*(.*)$/i);
+  const reps = rm ? rm[1].replace(/\s*(a|–|\/)\s*/g, '-').replace(/\s+/g, '') + (rm[2] ? 's' : '') : pega(col.reps).replace(/\s+/g, '');
+  const extra = rm?.[3]?.trim() || '';
   let t = nome;
   // Coluna única "Séries x Reps" com "4x12"
   const junto = [pega(col.series), pega(col.reps)].find((v) => /\d\s*[x×]\s*(\d|falha|max)/i.test(v));
@@ -177,15 +195,21 @@ function linhaDaTabela(cel, col) {
   else if (series && reps) t += ` ${series}x${reps}`;
   else if (series) t += ` ${series}x${pega(col.series).replace(/^\d+\s*x?\s*/i, '') || '10'}`;
   else if (reps) t += ` ${/x/i.test(reps) ? reps : '3x' + reps}`;
-  const d = col.desc >= 0 ? descansoSeg(pega(col.desc)) : null;
+  const d = col.desc >= 0 ? descansoSeg(pega(col.desc)) : descPadrao ? (Number(series) >= 4 ? descPadrao[1] : descPadrao[0]) : null;
   if (d) t += ` ${d}s`;
-  const obs = pega(col.obs);
+  const obs = [extra, pega(col.obs)].filter(Boolean).join('; ');
   if (obs) t += ` (${obs.replace(/[()]/g, '')})`;
   return t;
 }
 
 function cabecalhoTreinoNome(t) {
   const s = semAcento(t);
+  // "Seg · Quadríceps", "Sáb/Dom · Cardio leve", "Segunda-feira: Peito"
+  const ab = s.length < 70 && s.match(/^\s*((?:(?:seg|ter|qua|qui|sex|sab|dom)[a-z.-]*\s*(?:\/|,|e|&)\s*)*(?:seg|ter|qua|qui|sex|sab|dom)[a-z.-]*)\s*[·:\-–|]\s*(.+)$/);
+  if (ab) {
+    const dias = [...ab[1].matchAll(/(seg|ter|qua|qui|sex|sab|dom)/g)].map((x) => DIAS[x[1]]);
+    return `TREINO ${t.slice(t.length - ab[2].length).trim()} | ${[...new Set(dias)].join(', ')}`;
+  }
   // "Treino A", "Ficha B - Costas", "Dia 1", "Segunda-feira: Peito"
   const m = t.match(/^\s*(?:treino|ficha|dia)\s+([a-z]|\d{1,2})\b\s*[:\-–]?\s*(.*)$/i)
     || (t.length < 60 && !/\d\s*[x×]\s*\d/.test(t) && t.match(/^\s*(?:treino|ficha)\s+()(.+)$/i));
@@ -193,8 +217,9 @@ function cabecalhoTreinoNome(t) {
   if (m) {
     let resto = m[2].replace(/\(([^)]*)\)/, '').replace(/[|@].*$/, '').replace(/^[:\-–\s]+|[:\-–\s]+$/g, '').trim();
     if (!m[1]) {
-      // "Ficha de treino" é título de seção, não um treino.
+      // "Ficha de treino" e "Treino da Rafa" são títulos, não um treino.
       if (/^(de\s+)?(treino|musculacao|exercicios?)\b/.test(semAcento(resto))) return null;
+      if (/^(da|do)\s+[A-ZÀ-Ú]/.test(resto)) return null;
       resto = resto.replace(/^(de|do|da)\s+/i, '');
       resto = resto.charAt(0).toUpperCase() + resto.slice(1);
     }
@@ -209,16 +234,142 @@ function cabecalhoTreinoNome(t) {
   return null;
 }
 
+// ---------------- Modelo: dieta com cardápio por dia (tabela semanal) ----------------
+// Ex.: "Dieta da Rafa · 23/11 a 20/12": quadro de metas por semana, regras e, em cada página, uma
+// semana com uma linha por dia (Dia | Café da manhã (9h) | Almoço (13h) | ... | Extra | Total do dia).
+const numBr = (s) => Number(String(s).replace(/\./g, '').replace(',', '.'));
+function dataDoAno(dd, mm) {
+  const h = new Date();
+  let y = h.getFullYear();
+  const dt = new Date(y, mm - 1, dd);
+  if (dt - h > 180 * 86400000) y--; else if (h - dt > 180 * 86400000) y++;
+  return `${y}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+}
+const somarDiasIso = (iso, n) => { const [a, m, d] = iso.split('-').map(Number); const x = new Date(a, m - 1, d + n, 12); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+
+// Linhas quebradas da mesma comida voltam a ser um item ("Crepioca com mussarela" + "+ mamão").
+function juntarItens(linhasCel) {
+  const itens = [];
+  let kcal = null;
+  for (const l of linhasCel) {
+    const k = l.match(/^([\d.]+)\s*kcal$/i);
+    if (k) { kcal = numBr(k[1]); continue; }
+    const ant = itens.at(-1);
+    const abertos = ant ? (ant.match(/\(/g) || []).length - (ant.match(/\)/g) || []).length : 0;
+    const continua = ant && (abertos > 0 || /(\s(e|com|de|do|da|ao|na|no|em)|\+)$/i.test(ant) || /^[+(]/.test(l) || /^[a-zà-ú]/.test(l) || /^\d+\s*(g|ml|%)$/i.test(l) || /^\d+%$/.test(l));
+    if (continua) itens[itens.length - 1] = `${ant} ${l}`.replace(/\s+/g, ' ');
+    else itens.push(l);
+  }
+  return { itens, kcal };
+}
+
+const DIA_LINHA = /^(seg|ter|qua|qui|sex|s[áa]b|dom)\w*\.?\s+(\d{1,2})\/(\d{1,2})/i;
+
+function lerSemanaPdf(itens) {
+  const cab = itens.find((i) => i.str === 'Dia');
+  if (!cab) return null;
+  const cols = itens.filter((i) => Math.abs(i.y - cab.y) < cab.alt * 0.5).sort((a, b) => a.x - b.x)
+    .map((i) => {
+      const nome = i.str.replace(/\s*\(.*\)\s*$/, '').trim();
+      return { x: i.x, nome, hora: (i.str.match(/\((\d{1,2})h(\d{2})?\)/) || []).slice(1), total: /^total/i.test(nome) };
+    });
+  const colDe = (x) => { let c = 0; cols.forEach((k, i) => { if (k.x <= x + 3) c = i; }); return c; };
+  // Cada linha de comida pertence ao dia cuja etiqueta ("Sáb 28/11") está na mesma altura ou logo acima
+  // (a etiqueta pode ficar um pouco abaixo da primeira linha, por isso a folga).
+  const corpo = itens.filter((i) => i.y < cab.y - 1);
+  const dias = corpo.filter((i) => colDe(i.x) === 0 && DIA_LINHA.test(i.str)).sort((a, b) => b.y - a.y)
+    .map((i) => { const m = i.str.match(DIA_LINHA); return { y: i.y, tol: i.alt * 0.8, data: dataDoAno(Number(m[2]), Number(m[3])), cols: {} }; });
+  for (const it of corpo.sort((a, b) => b.y - a.y || a.x - b.x)) {
+    const c = colDe(it.x);
+    if (c === 0) continue;
+    const dono = dias.filter((d) => it.y <= d.y + d.tol).at(-1);
+    if (dono) (dono.cols[c] ||= []).push(it.str);
+  }
+  return { cols, dias };
+}
+
+function modeloDietaSemanal(linhas) {
+  const todo = linhas.map((c) => c.join(' | ')).join('\n');
+  const cardapio = {};
+  let refeicoes = null;
+  for (const pag of linhas.pdf || []) {
+    const sem = lerSemanaPdf(pag);
+    if (!sem) continue;
+    const ref = sem.cols.map((c, i) => ({ ...c, i })).filter((c) => c.i > 0 && !c.total);
+    refeicoes ||= ref.map((c) => ({ id: slug(c.nome), nome: c.nome, hora: c.hora[0] ? `${c.hora[0].padStart(2, '0')}:${c.hora[1] || '00'}` : '' }));
+    const iTot = sem.cols.findIndex((c) => c.total);
+    for (const d of sem.dias) {
+      const dia = {};
+      for (const c of ref) {
+        const { itens, kcal } = juntarItens(d.cols[c.i] || []);
+        if (itens.length) dia[slug(c.nome)] = { itens, ...(kcal != null ? { kcal } : {}) };
+      }
+      const tot = (d.cols[iTot] || []).join(' ');
+      const k = tot.match(/([\d.]+)\s*kcal/i), p = tot.match(/P\s*([\d,]+)\s*g/), cb = tot.match(/C\s*([\d,]+)\s*g/), g = tot.match(/G\s*([\d,]+)\s*g/);
+      if (k) dia.total = { kcal: numBr(k[1]), ...(p ? { p: numBr(p[1]) } : {}), ...(cb ? { cb: numBr(cb[1]) } : {}), ...(g ? { g: numBr(g[1]) } : {}) };
+      cardapio[d.data] = dia;
+    }
+  }
+  // Período do plano ("23/11 a 20/12") e metas por semana
+  const per = todo.match(/(\d{1,2})\/(\d{1,2})\s*a\s*(\d{1,2})\/(\d{1,2})/);
+  const datas = Object.keys(cardapio).sort();
+  const fimPlano = per ? dataDoAno(Number(per[3]), Number(per[4])) : datas.at(-1);
+  const linha = (re) => linhas.find((c) => c.length > 1 && re.test(semAcento(c[0])));
+  const iCal = linhas.findIndex((c) => c.length > 1 && /^calorias por dia/.test(semAcento(c[0])));
+  const metasPlano = [];
+  if (iCal > 0) {
+    const cabec = linhas[iCal - 1];
+    const vals = (re) => (linha(re) || []).slice(1);
+    const kc = vals(/^calorias por dia/), faixa = vals(/^vale ponto/), pr = vals(/^proteina/), cbs = vals(/^carbo/), gs = vals(/^gordura/), ag = vals(/^agua/);
+    kc.forEach((v, i) => {
+      const h = cabec[cabec.length - kc.length + i] || '';
+      const a = h.match(/(\d{1,2})\s*a\s*(\d{1,2})\/(\d{1,2})/), b = h.match(/a partir de\s*(\d{1,2})\/(\d{1,2})/i);
+      const de = a ? dataDoAno(Number(a[1]), Number(a[3])) : b ? dataDoAno(Number(b[1]), Number(b[2])) : datas[0];
+      const ate = a ? dataDoAno(Number(a[2]), Number(a[3])) : fimPlano;
+      const f = (faixa[i] || '').match(/([\d.]+)\s*e\s*([\d.]+)/);
+      const pm = (pr[i] || '').match(/([\d,]+)\s*g(?:.*?m[ií]nimo\s*([\d,]+))?/i);
+      const agua = (ag[i] || '').match(/([\d,]+)\s*(l|ml)/i);
+      metasPlano.push({
+        de, ate, kcal: numBr((v.match(/[\d.]+/) || [0])[0]),
+        ...(f ? { min: numBr(f[1]), max: numBr(f[2]) } : {}),
+        ...(pm ? { prot: numBr(pm[1]), ...(pm[2] ? { protMin: numBr(pm[2]) } : {}) } : {}),
+        ...((cbs[i] || '').match(/[\d,]+/) ? { carb: numBr(cbs[i].match(/[\d,]+/)[0]) } : {}),
+        ...((gs[i] || '').match(/[\d,]+/) ? { gord: numBr(gs[i].match(/[\d,]+/)[0]) } : {}),
+        ...(agua ? { agua: Math.round(numBr(agua[1]) * (/^l$/i.test(agua[2]) ? 1000 : 1)) } : {}),
+      });
+    });
+  }
+  const notas = linhas.filter((c) => c.length === 1 && /^[•·▪-]\s/.test(c[0])).map((c) => c[0].replace(/^[•·▪-]\s*/, ''));
+  // Notas de rodapé das semanas ("No sábado, o jantar é a refeição livre...")
+  const s = semAcento(todo);
+  const objetivo = /recomposi|defini/.test(s) ? 'manter' : /emagrec|perda de peso|deficit/.test(s) ? 'emagrecer' : /hipertrofi|ganho de massa|ganhar massa/.test(s) ? 'ganhar' : null;
+  const dieta = (refeicoes || []).map((r) => `${r.hora ? r.hora + ' ' : ''}${r.nome}:`).join('\n');
+  return {
+    treino: '', dieta,
+    extras: { cardapio, metasPlano, dietaNotas: notas, ...(objetivo ? { objetivoPlano: objetivo } : {}) },
+    resumo: `cardápio de ${datas.length} dias (${datas[0] ? datas[0].slice(8) + '/' + datas[0].slice(5, 7) : ''} a ${datas.at(-1) ? datas.at(-1).slice(8) + '/' + datas.at(-1).slice(5, 7) : ''}), ${metasPlano.length} período(s) de metas e ${notas.length} regras`,
+  };
+}
+
 // Modelos de arquivos conhecidos (a partir do primeiro arquivo real de cada pessoa).
-// Cada um: { nome, reconhece(textoTodo) → bool, montar(linhas) → { treino, dieta } }.
-const MODELOS = [];
+// Cada um: { nome, reconhece(texto, linhas) → bool, montar(linhas) → { treino, dieta, extras?, resumo? } }.
+const MODELOS = [
+  {
+    nome: 'Dieta com cardápio por dia',
+    reconhece: (todo, linhas) => !!linhas.pdf && /total do dia/i.test(todo) && /caf[eé] da manh[aã]/i.test(todo) && linhas.some((c) => DIA_LINHA.test(c[0] || '')),
+    montar: modeloDietaSemanal,
+  },
+];
 
 export function montarPlano(linhas) {
   const todo = linhas.map((c) => c.join(' ')).join('\n');
-  const modelo = MODELOS.find((m) => m.reconhece(todo));
+  const modelo = MODELOS.find((m) => m.reconhece(todo, linhas));
   if (modelo) return { ...modelo.montar(linhas), modelo: modelo.nome };
 
-  const treino = [], dieta = [];
+  const treino = [], dieta = [], treinoNotas = [];
+  // "Descanso de 60 a 90 s entre as séries" vale para as tabelas sem coluna de descanso
+  const dp = semAcento(todo).match(/descanso\s+de\s+(\d+)\s*(?:a|-)\s*(\d+)\s*s/) || semAcento(todo).match(/descanso\s+de\s+(\d+)()\s*s/);
+  const descPadrao = dp ? [Number(dp[1]), Number(dp[2] || dp[1])] : null;
   let modo = null, tabela = null, refeicaoAberta = false;
   for (const cel of linhas) {
     if (!cel.length) { tabela = null; continue; }
@@ -228,11 +379,17 @@ export function montarPlano(linhas) {
 
     const cab = cabecalhoTreino(cel);
     if (cab && cel.length > 1) { tabela = cab; modo = 'treino'; continue; }
-    if (tabela && cel.length > 1) { const l = linhaDaTabela(cel, tabela); if (l) treino.push(l); continue; }
+    if (tabela && cel.length > 1) { const l = linhaDaTabela(cel, tabela, descPadrao); if (l) treino.push(l); continue; }
     tabela = null;
 
     const nomeTreino = cabecalhoTreinoNome(texto);
     if (nomeTreino) { modo = 'treino'; treino.push('', nomeTreino); continue; }
+    // Antes do primeiro treino, marcadores e textos longos são orientações, não exercícios
+    if (modo === 'treino' && !treino.some((l) => l.startsWith('TREINO')) && !/\d+\s*[x×]\s*\d/.test(normalizarExercicio(texto))) {
+      if (/^[•·▪*-]\s/.test(texto) || texto.length > 70) treinoNotas.push(texto.replace(/^[•·▪*-]\s*/, ''));
+      else if (/^[a-zà-ú]/.test(texto) && treinoNotas.length) treinoNotas[treinoNotas.length - 1] += ` ${texto}`; // continuação da frase
+      continue;
+    }
 
     const ehRefeicao = REFEICAO.test(s) && texto.length <= 70;
     if (ehRefeicao) {
@@ -257,6 +414,7 @@ export function montarPlano(linhas) {
   return {
     treino: treino.join('\n').replace(/^\n+/, '').replace(/\n{3,}/g, '\n\n').trim(),
     dieta: dieta.join('\n').trim(),
+    extras: treinoNotas.length ? { treinoNotas } : {},
     modelo: null,
   };
 }

@@ -30,7 +30,8 @@ Projeto separado do `financas`, mas com a mesma base: HTML/JS puro, GitHub Pages
 - [ ] Conquistas (7 dias batendo proteína etc.) e "coringa" semanal
 - [ ] Leitura automática do Samsung Health / Apple Saúde (sem foto): via Strava (API + Apps Script) ou atalho do iPhone pronto
 - [ ] Comentários nos check-ins dos desafios
-- [ ] Modelo do arquivo real do plano dela (a partir do primeiro arquivo, em `MODELOS`)
+- [x] Modelo do arquivo real do plano dela: "Dieta com cardápio por dia" (tabela semanal por página, metas por período, regras) e treino em tabela por dia da semana ("Seg · Quadríceps"). O plano guarda `cardapio` (por data), `metasPlano`, `dietaNotas`, `treinoNotas`, `objetivoPlano`
+- [ ] Plano do Victor no mesmo modelo (a partir do primeiro arquivo, em `MODELOS`)
 - [ ] Testar a dupla com as duas contas reais
 - [ ] Colar/importar o plano real dela (e o dele) no app
 - [ ] 4. Lembretes (bot do Telegram e/ou notificação)

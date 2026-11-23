@@ -21,6 +21,7 @@ Abra `index.html` por um servidor local (`python -m http.server` na pasta) e, pa
 - **Ofensiva** conta a partir de 24/11/2026 (`INICIO_OFENSIVA` em `calc.js`); antes disso nada conta como falha
 - **Progresso**: calendário do mês, peso (privado), recordes e gráfico por exercício
 - **Plano**: cole o treino e a dieta em texto simples (formato em *Plano → Editar → Como escrever*) ou **importe de um arquivo** (PDF, Word .docx, Excel .xlsx, CSV ou texto). O app preenche os campos e você confere antes de salvar.
+  - Dieta em PDF com **cardápio por dia** (uma semana por página: Dia | Café | Almoço | Lanche | Jantar | Extra | Total) vira cardápio por data, com **metas por período** (calorias, faixa que vale ponto, proteína, água) e as regras da nutricionista. A tela Hoje mostra o cardápio do dia e o Placar usa essas metas.
 - Funciona offline e pode ser instalado no celular
 
 ## Publicar

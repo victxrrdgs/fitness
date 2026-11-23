@@ -301,9 +301,20 @@ export const ATIVIDADE = { sedentario: [1.2, 'Sedentário'], leve: [1.375, 'Leve
 const lim = (x, a, b) => Math.min(b, Math.max(a, x));
 const r1 = (x) => Math.round(x * 10) / 10;
 
-export function calcularMetas(corpo = {}, pesoAtual = null) {
+// mp: metas do plano para o dia (da nutricionista: kcal, faixa min-max, proteína, água...).
+// Ordem: o que a pessoa digitou > plano > cálculo automático.
+export function calcularMetas(corpo = {}, pesoAtual = null, mp = null, objetivoPlano = null) {
+  if (mp?.kcal) {
+    const base = calcularMetas({ ...corpo, kcalManual: corpo.kcalManual || mp.kcal, protManual: corpo.protManual || mp.prot }, pesoAtual, null, objetivoPlano);
+    return {
+      ...base, completo: true,
+      ...(mp.carb ? { carb: mp.carb } : {}), ...(mp.gord ? { gord: mp.gord } : {}),
+      ...(!corpo.kcalManual && mp.min && mp.max ? { faixa: [mp.min, mp.max] } : {}),
+      ...(mp.protMin ? { protMin: mp.protMin } : {}), ...(mp.agua ? { agua: mp.agua } : {}),
+    };
+  }
   const kg = Number(pesoAtual || corpo.peso) || 0, cm = Number(corpo.altura) || 0, idade = Number(corpo.idade) || 0;
-  const objetivo = OBJETIVOS[corpo.objetivo] ? corpo.objetivo : 'manter';
+  const objetivo = OBJETIVOS[corpo.objetivo] ? corpo.objetivo : OBJETIVOS[objetivoPlano] ? objetivoPlano : 'manter';
   let kcal = null, tmb = null;
   if (kg && cm && idade) {
     // Mifflin-St Jeor
@@ -347,10 +358,11 @@ export function novaTaco(nome, cat) {
 }
 
 // Nota da refeição (0 a 10) para o objetivo da pessoa, com os motivos.
-export function notaRefeicao(itens, m) {
+// alvo: kcal previstas para esta refeição no cardápio do dia (se houver)
+export function notaRefeicao(itens, m, alvo = null) {
   if (!itens.length) return null;
   const t = somarItens(itens);
-  const alvoK = m.kcal / m.refeicoes, alvoP = m.prot / m.refeicoes;
+  const alvoK = alvo || m.kcal / m.refeicoes, alvoP = alvo ? (m.prot * alvo) / m.kcal : m.prot / m.refeicoes;
   const r = t.kcal / alvoK;
   const [ini, fim, queda] = { emagrecer: [0.5, 1, 14], manter: [0.6, 1.15, 10], ganhar: [0.8, 1.45, 7] }[m.objetivo];
   const nK = lim(r < ini ? 10 - (ini - r) * 8 : r <= fim ? 10 : 10 - (r - fim) * queda, 0, 10);
@@ -361,7 +373,7 @@ export function notaRefeicao(itens, m) {
   const [wK, wP, wQ] = { emagrecer: [0.45, 0.3, 0.25], manter: [0.35, 0.3, 0.35], ganhar: [0.35, 0.45, 0.2] }[m.objetivo];
   const nota = r1(nK * wK + nP * wP + nQ * wQ);
   const motivos = [];
-  if (r > fim) motivos.push(`${Math.round((r - 1) * 100)}% acima das calorias ideais por refeição${m.objetivo === 'emagrecer' ? ' para emagrecer' : ''}`);
+  if (r > fim) motivos.push(`${Math.round((r - 1) * 100)}% acima ${alvo ? `do previsto no cardápio (${Math.round(alvo)} kcal)` : `das calorias ideais por refeição${m.objetivo === 'emagrecer' ? ' para emagrecer' : ''}`}`);
   else if (r < ini) motivos.push(m.objetivo === 'ganhar' ? 'pouca comida para ganhar massa' : 'refeição leve');
   else motivos.push('calorias na medida');
   motivos.push(t.p >= alvoP * 0.8 ? `boa proteína (${Math.round(t.p)} g)` : `pouca proteína (${Math.round(t.p)} g de ~${Math.round(alvoP)} g)`);
@@ -381,6 +393,12 @@ export const TIPOS_CARDIO = ['corrida', 'caminhada', 'bike', 'natacao', 'funcion
 const curva = (x) => Math.pow(lim(x, 0, 1), 0.7);
 
 function pontosKcal(kcal, m) {
+  // Faixa que "vale ponto" definida no plano: dentro dela, nota cheia
+  if (m.faixa) {
+    const [mn, mx] = m.faixa;
+    const fora = kcal < mn ? (mn - kcal) / m.kcal : kcal > mx ? (kcal - mx) / m.kcal : 0;
+    return 15 * lim(1 - fora / 0.35, 0, 1);
+  }
   const d = (kcal - m.kcal) / m.kcal;
   const [a, b] = { emagrecer: [-0.25, 0.05], manter: [-0.1, 0.1], ganhar: [-0.05, 0.15] }[m.objetivo];
   const fora = d < a ? a - d : d > b ? d - b : 0;
@@ -394,7 +412,7 @@ export function pontosDia({ m, comidas = [], av = {}, dia = {}, checkins = [], m
   // Alimentação
   const grupos = {};
   for (const i of comidas) (grupos[i.grupo || 'outro'] ||= []).push(i);
-  const notas = Object.entries(grupos).map(([g, it]) => ({ grupo: g, nome: it[0].grupoNome || g, ...notaRefeicao(it, m) }));
+  const notas = Object.entries(grupos).map(([g, it]) => ({ grupo: g, nome: it[0].grupoNome || g, ...notaRefeicao(it, m, m.alvos?.[g]) }));
   if (comidas.length) {
     const t = somarItens(comidas);
     const mediaNota = notas.reduce((a, x) => a + x.nota * x.kcal, 0) / Math.max(1, notas.reduce((a, x) => a + x.kcal, 0));

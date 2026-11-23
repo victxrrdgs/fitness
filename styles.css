@@ -649,3 +649,8 @@ form label small { color: var(--faint); }
 .rodada td { padding: 5px 4px; text-align: center; border-top: 1px solid var(--stroke); }
 .rodada td:first-child { text-align: left; color: var(--muted); text-transform: capitalize; }
 .rodada tr.tot td { font-weight: 700; color: var(--text); }
+
+/* Plano importado */
+.notas { margin: 0; padding-left: 18px; color: var(--muted); font-size: .85rem; line-height: 1.5; }
+.notas li + li { margin-top: 6px; }
+.kc { color: var(--faint); font-size: .75rem; font-weight: 500; }

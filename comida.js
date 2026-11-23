@@ -1,6 +1,6 @@
 // Aba Comer: busca na TACO (alimentos brasileiros, local), Open Food Facts (produtos com código de barras)
 // e leitura do código de barras pela foto. Carregado só quando a pessoa vai registrar um alimento.
-import { novaTaco } from './calc.js?v=0.4';
+import { novaTaco } from './calc.js?v=0.5';
 
 const BARCODE = 'https://cdn.jsdelivr.net/npm/barcode-detector@3.2.4/dist/iife/ponyfill.js';
 const BARCODE_SRI = 'sha384-V0LFv1UaolwYOQ6Y1C07pBzM25t1t+HbAAwyN47cJtg/Sqa2jYnTPGGt+oL1kjS/';

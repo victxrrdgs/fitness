@@ -1,7 +1,7 @@
-import { criarStore, modoLocal, CONVITE_MIN, ENTRADA_DIAS } from './store.js?v=0.4';
-import * as C from './calc.js?v=0.4';
+import { criarStore, modoLocal, CONVITE_MIN, ENTRADA_DIAS } from './store.js?v=0.5';
+import * as C from './calc.js?v=0.5';
 
-const VERSAO = '0.4';
+const VERSAO = '0.5';
 const MAX_PARCEIROS = 5;
 const DIAS_EDITAVEIS = 2; // dá para corrigir até anteontem
 const JANELA_MAPA = 60; // dias publicados no perfil para a dupla
@@ -248,14 +248,24 @@ function ofensivaComParceiro(pf) {
 }
 
 // ---------------- Placar do dia ----------------
-const metas = () => C.calcularMetas(prefs().corpo || {}, D.pesos.at(-1)?.kg);
+// Plano com cardápio por dia e metas por período (importados do PDF da nutricionista)
+const cardapioDe = (d) => D.plano?.cardapio?.[d] || null;
+const metaPlanoDe = (d) => (D.plano?.metasPlano || []).find((x) => x.de <= d && d <= x.ate) || null;
+const itensRef = (d, r) => cardapioDe(d)?.[r.id]?.itens || r.itens;
+function metas(d = dataSel) {
+  const m = C.calcularMetas(prefs().corpo || {}, D.pesos.at(-1)?.kg, metaPlanoDe(d), D.plano?.objetivoPlano);
+  const c = cardapioDe(d);
+  if (c) m.alvos = Object.fromEntries(Object.entries(c).filter(([k, v]) => k !== 'total' && v.kcal).map(([k, v]) => [k, v.kcal]));
+  return m;
+}
+const metaAgua = (d = dataSel) => metas(d).agua || prefs().metaAgua;
 const comidasDe = (d) => D.comidas.filter((x) => x.data === d);
 
 function pontosDe(d) {
   const dia = diaDoc(d) || {};
   const av = avaliar(d);
   av.progressoTreino = C.progressoTreino(C.treinoDoDia(D.plano, d, dia), dia);
-  return C.pontosDia({ m: metas(), comidas: comidasDe(d), av, dia, checkins: D.ckJanela.filter((x) => x.data === d), metaAgua: prefs().metaAgua });
+  return C.pontosDia({ m: metas(d), comidas: comidasDe(d), av, dia, checkins: D.ckJanela.filter((x) => x.data === d), metaAgua: metaAgua(d) });
 }
 
 // Grava no registro do dia os pontos e as notas das refeições (a dupla vê) e,
@@ -326,7 +336,7 @@ function salvarDia(d, patch) {
     prev: {
       treino: treino ? { id: treino.id, nome: treino.nome, total: treino.exercicios.reduce((a, e) => a + (e.series || 1), 0) } : null,
       refeicoes: (D.plano?.refeicoes || []).map((r) => ({ id: r.id, nome: r.nome, hora: r.hora })),
-      metaAgua: prefs().metaAgua,
+      metaAgua: metaAgua(d),
     },
     atualizado: Date.now(),
   };
@@ -497,7 +507,7 @@ function telaHoje() {
         <div class="hora">${esc(r.hora)}</div>
         <div class="info">
           <div class="t">${esc(r.nome)}</div>
-          ${r.itens.length ? `<div class="itens">${r.itens.map(esc).join(' · ')}</div>` : ''}
+          ${itensRef(d, r).length ? `<div class="itens">${itensRef(d, r).map(esc).join(' · ')}${cardapioDe(d)?.[r.id]?.kcal ? ` <span class="kc">· ${cardapioDe(d)[r.id].kcal} kcal</span>` : ''}</div>` : ''}
           ${nota ? `<div class="nota-ref">🔄 ${esc(nota)}</div>` : ''}
           ${fotos.length ? `<div class="fotos">${fotos.map((f) => `<img src="${f.img}" alt="" data-a="ver-foto" data-id="${f.id}">`).join('')}</div>` : ''}
           ${ed ? `<div class="st3">
@@ -513,7 +523,7 @@ function telaHoje() {
 
   // Água
   if (!futuro) {
-    const meta = prefs().metaAgua;
+    const meta = metaAgua(d);
     const ag = dia.agua || 0;
     html += `<div class="sec"><div class="agua g">
       <div class="agua-top"><span class="e">💧</span><div class="info"><div class="v">${num(ag / 1000)} L</div><div class="m">meta ${num(meta / 1000)} L</div></div>
@@ -539,7 +549,7 @@ function cartaoPlacar(d) {
 
 function modalPlacar(d) {
   const p = pontosDe(d);
-  const m = metas();
+  const m = metas(d);
   abrirModal(`Placar · ${C.rotuloDia(d)}`, `
     <div class="pl-n" style="text-align:center">${p.total}<small>/100</small></div>
     ${p.dicas.length ? `<div class="aviso"><b>Para subir:</b><br>${p.dicas.map(esc).join('<br>')}</div>` : '<div class="aviso">Dia redondo! 🎯</div>'}
@@ -548,10 +558,10 @@ function modalPlacar(d) {
       <b>Alimentação (35)</b>: calorias na faixa do seu objetivo (15), proteína (10) e qualidade das refeições (10). Sem registrar na aba Comer, vale até 70% pelas refeições do plano marcadas.<br>
       <b>Treino (25)</b>: treino do plano ou check-in. Dia de descanso planejado vale 15.<br>
       <b>Cardio (15)</b>: minutos de corrida, caminhada, bike, natação, funcional ou esporte (meta ${m.cardioSemana} min por semana).<br>
-      <b>Água (10)</b>: meta de ${num(prefs().metaAgua / 1000)} L.<br>
+      <b>Água (10)</b>: meta de ${num(metaAgua(d) / 1000)} L.<br>
       <b>Bônus (15)</b>: sono de ${m.sono} h ou mais (6), dia sem álcool (3), 8 mil passos (3), 3 refeições registradas (3).<br>
       Cada meta tem teto e o começo vale mais que o finalzinho. Se todas as quatro primeiras passarem da metade: <b>+10%</b>.<br>
-      Seu objetivo: <b>${esc(C.OBJETIVOS[m.objetivo])}</b> · ${m.kcal} kcal · ${m.prot} g de proteína.</p></div>
+      Seu objetivo: <b>${esc(C.OBJETIVOS[m.objetivo])}</b> · ${m.faixa ? `${m.faixa[0]} a ${m.faixa[1]} kcal (faixa do plano)` : `${m.kcal} kcal`} · ${m.prot} g de proteína.</p></div>
     <div class="acoes"><button class="btn" data-a="objetivo">Ajustar meu objetivo</button></div>`);
 }
 
@@ -573,7 +583,7 @@ const GRUPOS_PADRAO = [['cafe', 'Café da manhã'], ['lanche-manha', 'Lanche da 
 function gruposRefeicao() {
   const ref = D.plano?.refeicoes || [];
   const g = ref.length ? ref.map((r) => ({ id: r.id, nome: r.nome, hora: r.hora })) : GRUPOS_PADRAO.map(([id, nome]) => ({ id, nome, hora: '' }));
-  return [...g, { id: 'extra', nome: 'Extra / beliscos', hora: '' }];
+  return g.some((x) => x.id === 'extra') ? g : [...g, { id: 'extra', nome: 'Extra / beliscos', hora: '' }];
 }
 // Sugere a refeição pela hora
 function grupoAgora() {
@@ -625,7 +635,7 @@ async function modalComida(modo = 'buscar', grupo = null, existente = null) {
   grupo ||= existente?.grupo || grupoAgora();
   abrirModal(existente ? 'Editar alimento' : 'Adicionar alimento', '<div class="vazio">Carregando…</div>');
   let K;
-  try { K = await import('./comida.js?v=0.4'); } catch (e) { $('#modal-corpo').innerHTML = '<p class="erro">Sem conexão para carregar a busca.</p>'; return; }
+  try { K = await import('./comida.js?v=0.5'); } catch (e) { $('#modal-corpo').innerHTML = '<p class="erro">Sem conexão para carregar a busca.</p>'; return; }
   const corpo = $('#modal-corpo');
   if (existente) { quantidade(existente.alimento || null); return; }
 
@@ -710,7 +720,8 @@ async function modalComida(modo = 'buscar', grupo = null, existente = null) {
       const v = K.porQuantidade(a, g);
       const grupoSel = f.grupo.value;
       const outros = comidasDe(x?.data || dataSel).filter((y) => (y.grupo || 'extra') === grupoSel && y.id !== x?.id);
-      const nota = C.notaRefeicao([...outros, { ...v, nova: a.nova, nome: a.nome }], metas());
+      const mm = metas(x?.data || dataSel);
+      const nota = C.notaRefeicao([...outros, { ...v, nova: a.nova, nome: a.nome }], mm, mm.alvos?.[grupoSel]);
       corpo.querySelector('#prev').innerHTML = `<b>${v.kcal} kcal</b> · P ${num(v.p)} g · C ${num(v.cb)} g · G ${num(v.g)} g${nota ? `<br>Nota da refeição: <b>${num(nota.nota)}</b> · ${esc(nota.motivos.join(' · '))}` : ''}`;
     };
     corpo.querySelectorAll('[data-md]').forEach((b) => { b.onclick = () => { base = medidas[Number(b.dataset.md)]; f.qtd.value = '1'; f.gramas.value = num(base.g); medida = rotulo(1, base); corpo.querySelectorAll('[data-md]').forEach((y) => y.classList.toggle('on', y === b)); prev(); }; });
@@ -1441,10 +1452,26 @@ function telaPlano() {
       + t.exercicios.map((e) => `<div class="row"><div class="info"><div class="t">${esc(e.nome)}</div><div class="m">${esc([seriesTxt(e), e.descanso ? `${e.descanso}s descanso` : '', e.obs].filter(Boolean).join(' · '))}</div></div></div>`).join('')
       + '</div></div>';
   }
+  if (plano.treinoNotas?.length) {
+    html += `<div class="sec"><div class="sec-h"><h3>📝 Como treinar</h3></div><div class="card g"><ul class="notas">${plano.treinoNotas.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div></div>`;
+  }
+  const h = C.hoje();
+  const mp = metaPlanoDe(h);
+  if (plano.metasPlano?.length) {
+    html += `<div class="sec"><div class="sec-h"><h3>🎯 Metas da dieta</h3></div><div class="list g">${plano.metasPlano.map((x) => `<div class="row ${x === mp ? 'eu' : ''}"><div class="info"><div class="t">${dataCurta(x.de)} a ${dataCurta(x.ate)}${x === mp ? ' · agora' : ''}</div><div class="m">${x.min && x.max ? `vale ponto entre ${x.min} e ${x.max} kcal · ` : ''}P ${x.prot || '?'} g${x.protMin ? ` (mín. ${x.protMin})` : ''} · C ${x.carb || '?'} g · G ${x.gord || '?'} g${x.agua ? ` · água ${num(x.agua / 1000)} L` : ''}</div></div><div class="v">${x.kcal} kcal</div></div>`).join('')}</div></div>`;
+  }
   if (plano.refeicoes?.length) {
-    html += '<div class="sec"><div class="sec-h"><h3>🍽️ Dieta</h3></div><div class="list g">'
-      + plano.refeicoes.map((r) => `<div class="ref"><div class="hora">${esc(r.hora)}</div><div class="info"><div class="t">${esc(r.nome)}</div><div class="itens">${r.itens.map(esc).join(' · ')}</div></div></div>`).join('')
+    const c = cardapioDe(h);
+    html += `<div class="sec"><div class="sec-h"><h3>🍽️ Dieta${c ? ' de hoje' : ''}</h3>${c?.total ? `<span class="tag green">${c.total.kcal} kcal</span>` : ''}</div><div class="list g">`
+      + plano.refeicoes.map((r) => `<div class="ref"><div class="hora">${esc(r.hora)}</div><div class="info"><div class="t">${esc(r.nome)}${c?.[r.id]?.kcal ? ` <small class="kc">${c[r.id].kcal} kcal</small>` : ''}</div><div class="itens">${itensRef(h, r).map(esc).join(' · ')}</div></div></div>`).join('')
       + '</div></div>';
+    if (plano.cardapio) {
+      const ds = Object.keys(plano.cardapio).sort();
+      html += `<p class="rodape" style="margin-top:10px">Cardápio muda por dia: ${dataCurta(ds[0])} a ${dataCurta(ds.at(-1))}. Use ‹ › no topo da tela Hoje para ver outros dias.</p>`;
+    }
+  }
+  if (plano.dietaNotas?.length) {
+    html += `<div class="sec"><div class="sec-h"><h3>📌 Regras da dieta</h3></div><div class="card g"><ul class="notas">${plano.dietaNotas.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div></div>`;
   }
   html += '<div class="acoes"><button class="btn lime" data-a="editar-plano">Editar plano</button></div>';
   return html;
@@ -1506,36 +1533,46 @@ function modalPlano() {
     <div class="acoes">${p.treinoTexto || p.dietaTexto ? '' : '<button type="button" class="btn" data-a="exemplo-plano">Usar exemplo</button>'}<button class="btn lime">Salvar plano</button></div>
   </form>`, (el) => {
     const f = el.querySelector('form');
+    // Cardápio por dia, metas por período e orientações que vieram dos arquivos importados
+    const EXTRAS = ['cardapio', 'metasPlano', 'dietaNotas', 'treinoNotas', 'objetivoPlano'];
+    const extras = Object.fromEntries(EXTRAS.filter((k) => p[k]).map((k) => [k, p[k]]));
     const previa = () => {
       const t = C.lerTreino(f.treino.value); const d = C.lerDieta(f.dieta.value);
       const nEx = t.treinos.reduce((a, x) => a + x.exercicios.length, 0);
       const dias = Object.keys(t.agenda).length;
+      const nCard = Object.keys(extras.cardapio || {}).length;
       el.querySelector('#previa').innerHTML = `Entendi: <b>${plural(t.treinos.length, 'treino', 'treinos')}</b> (${plural(nEx, 'exercício', 'exercícios')}), ${plural(dias, 'dia', 'dias')} de treino na semana e <b>${plural(d.refeicoes.length, 'refeição', 'refeições')}</b> por dia.`
+        + (nCard ? `<br>📅 Cardápio de <b>${nCard} dias</b>${extras.metasPlano?.length ? ` e metas de ${extras.metasPlano.map((x) => `${x.kcal} kcal`).join(' → ')}` : ''}. <button type="button" class="link" data-tirar-cardapio>Remover cardápio</button>` : '')
         + (t.treinos.length && !dias ? '<br>⚠️ Nenhum dia da semana definido: coloque <code>| seg, qua, sex</code> depois do nome do treino.' : '');
+      el.querySelector('[data-tirar-cardapio]')?.addEventListener('click', () => { delete extras.cardapio; delete extras.metasPlano; delete extras.dietaNotas; previa(); });
     };
     f.addEventListener('input', previa); previa();
     f.addEventListener('submit', (e) => {
       e.preventDefault();
       const t = C.lerTreino(f.treino.value); const d = C.lerDieta(f.dieta.value);
-      store.definir(['usuarios', uid, 'config', 'plano'], { treinoTexto: f.treino.value, dietaTexto: f.dieta.value, treinos: t.treinos, agenda: t.agenda, refeicoes: d.refeicoes, atualizado: Date.now() }, false);
+      store.definir(['usuarios', uid, 'config', 'plano'], { treinoTexto: f.treino.value, dietaTexto: f.dieta.value, treinos: t.treinos, agenda: t.agenda, refeicoes: d.refeicoes, ...extras, atualizado: Date.now() }, false);
       fecharModal(); toast('Plano salvo ✓');
     });
     el.querySelector('[data-a="exemplo-plano"]')?.addEventListener('click', () => { f.treino.value = C.EXEMPLO_TREINO; f.dieta.value = C.EXEMPLO_DIETA; previa(); });
-    import('./importar.js?v=0.4').then((I) => { f.arquivo.accept = I.ACEITA; }).catch(() => {});
+    import('./importar.js?v=0.5').then((I) => { f.arquivo.accept = I.ACEITA; }).catch(() => {});
     f.arquivo.addEventListener('change', async () => {
       const arq = f.arquivo.files[0]; f.arquivo.value = '';
       if (!arq) return;
       const box = el.querySelector('#importado');
       box.className = 'aviso'; box.textContent = `Lendo ${arq.name}…`;
       try {
-        const I = await import('./importar.js?v=0.4');
+        const I = await import('./importar.js?v=0.5');
         const linhas = await I.lerArquivo(arq);
         const r = I.montarPlano(linhas);
         if (r.treino) f.treino.value = r.treino;
         if (r.dieta) f.dieta.value = r.dieta;
+        // Dieta nova substitui o cardápio antigo; treino novo, as orientações do treino
+        if (r.dieta) { delete extras.cardapio; delete extras.metasPlano; delete extras.dietaNotas; }
+        if (r.treino) delete extras.treinoNotas;
+        Object.assign(extras, r.extras || {});
         const achou = [r.treino && 'treino', r.dieta && 'dieta'].filter(Boolean).join(' e ');
         box.innerHTML = (achou
-          ? `✓ Li o <b>${esc(arq.name)}</b> e preenchi ${achou}${r.modelo ? ` (modelo: ${esc(r.modelo)})` : ''}. <b>Confira e ajuste</b> antes de salvar.`
+          ? `✓ Li o <b>${esc(arq.name)}</b> e preenchi ${achou}${r.modelo ? ` (modelo: ${esc(r.modelo)})` : ''}${r.resumo ? `: ${esc(r.resumo)}` : ''}. <b>Confira</b> e, se tiver o outro arquivo (treino ou dieta), importe também antes de salvar.`
           : `Não reconheci treino nem dieta em <b>${esc(arq.name)}</b>. O texto do arquivo está abaixo: copie o que precisar para os campos.`)
           + `<details class="dicas"><summary>Texto do arquivo</summary><textarea class="ta" readonly rows="8">${esc(I.textoOriginal(linhas))}</textarea></details>`;
         previa();
