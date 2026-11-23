@@ -187,6 +187,9 @@ export function progressoTreino(treino, dia) {
 // Um dia não cumprido gasta um congelamento (a ofensiva não cresce, mas não zera).
 // Sem congelamento, a ofensiva zera. Hoje só conta quando é cumprido.
 export const MAX_GELO = 2;
+// Dia em que o app passou a valer de verdade: nada antes disso conta (nem como falha).
+export const INICIO_OFENSIVA = '2026-11-24';
+export const inicioEfetivo = (inicio) => [inicio || hoje(), INICIO_OFENSIVA].sort().at(-1);
 export function calcularOfensiva(inicio, cumpridoEm, ate = hoje()) {
   const mapa = {};
   let atual = 0, recorde = 0, gelo = 1;
@@ -225,6 +228,65 @@ export function ofensivaDupla(inicio, mapaA, mapaB, ate = hoje()) {
   recorde = Math.max(recorde, atual);
   return { atual, recorde, dias, hojeOk };
 }
+
+// ---------------- Desafios (estilo GymRats) ----------------
+// Desafio: { nome, inicio, fim, criterio: 'dias' | 'minutos', membros, perfis }.
+// Check-in: { uid, data, minutos, ... }. Só contam os check-ins entre início e fim.
+export function statusDesafio(d, h = hoje()) {
+  const total = difDias(d.inicio, d.fim) + 1;
+  if (h < d.inicio) return { fase: 'futuro', total, faltam: difDias(h, d.inicio), dia: 0 };
+  if (h > d.fim) return { fase: 'encerrado', total, dia: total };
+  return { fase: 'ativo', total, dia: difDias(d.inicio, h) + 1, restam: difDias(h, d.fim) };
+}
+
+export function placarDesafio(d, checkins) {
+  const por = Object.fromEntries((d.membros || []).map((u) => [u, { uid: u, dias: new Set(), minutos: 0, checkins: 0 }]));
+  for (const c of checkins) {
+    if (!c.data || c.data < d.inicio || c.data > d.fim) continue;
+    const p = por[c.uid] ||= { uid: c.uid, dias: new Set(), minutos: 0, checkins: 0, saiu: true };
+    p.dias.add(c.data); p.minutos += Number(c.minutos) || 0; p.checkins++;
+  }
+  const lista = Object.values(por).map((p) => ({ ...p, dias: p.dias.size, pontos: d.criterio === 'minutos' ? p.minutos : p.dias.size }));
+  lista.sort((a, b) => b.pontos - a.pontos || (d.criterio === 'minutos' ? b.dias - a.dias : b.minutos - a.minutos));
+  // Empate divide a posição
+  lista.forEach((p, i) => { p.pos = i && lista[i - 1].pontos === p.pontos ? lista[i - 1].pos : i + 1; });
+  return lista;
+}
+
+// Lê duração, calorias e distância de um texto compartilhado (Samsung Health, Apple Saúde, Strava...).
+export function lerResumoTreino(texto) {
+  const t = String(texto || '').replace(/ /g, ' ');
+  const out = {};
+  const hms = t.match(/\b(\d{1,2}):(\d{2}):(\d{2})\b/);
+  const hm = t.match(/\b(\d{1,2})\s*h\s*(\d{1,2})\s*(?:min|m)\b/i);
+  const min = t.match(/\b(\d{1,3})\s*(?:min|minutos)\b/i);
+  const ms = !hms && t.match(/(?:dura[cç][aã]o|tempo|duration)\D{0,12}(\d{1,3}):(\d{2})\b/i);
+  if (hms) out.minutos = Number(hms[1]) * 60 + Number(hms[2]) + (Number(hms[3]) >= 30 ? 1 : 0);
+  else if (hm) out.minutos = Number(hm[1]) * 60 + Number(hm[2]);
+  else if (ms) out.minutos = Number(ms[1]) + (Number(ms[2]) >= 30 ? 1 : 0);
+  else if (min) out.minutos = Number(min[1]);
+  const kcal = t.match(/(\d[\d.]*)[ \t]*kcal/i) || t.match(/calorias[^\d]{0,20}(\d[\d.]*)/i) || t.match(/(\d[\d.]*)[ \t]*(?:cal\b|calorias)/i);
+  if (kcal) out.kcal = Number(kcal[1].replace(/\./g, ''));
+  const km = t.match(/(\d+(?:[.,]\d+)?)[ \t]*km\b/i);
+  if (km) out.km = Number(km[1].replace(',', '.'));
+  const s = t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const tipo = s.trim() && TIPOS.find((x) => x.chaves.test(s));
+  if (tipo) out.tipo = tipo.id;
+  return out;
+}
+
+export const TIPOS = [
+  { id: 'musculacao', nome: 'Musculação', e: '🏋️', chaves: /muscula|strength|weight|forca|academia/ },
+  { id: 'corrida', nome: 'Corrida', e: '🏃', chaves: /corrida|correr|running|run\b/ },
+  { id: 'caminhada', nome: 'Caminhada', e: '🚶', chaves: /caminhada|walk/ },
+  { id: 'bike', nome: 'Bike', e: '🚴', chaves: /bike|cicl|cycling|bicicleta|spinning/ },
+  { id: 'funcional', nome: 'Funcional', e: '🤸', chaves: /funcional|hiit|crossfit|cross training|functional/ },
+  { id: 'natacao', nome: 'Natação', e: '🏊', chaves: /nata[cç]|swim|piscina/ },
+  { id: 'esporte', nome: 'Esporte', e: '⚽', chaves: /futebol|volei|tenis|beach|basquete|soccer|tennis/ },
+  { id: 'yoga', nome: 'Yoga/Pilates', e: '🧘', chaves: /yoga|pilates|alongamento|stretch/ },
+  { id: 'outro', nome: 'Outro', e: '✨', chaves: /(?!)/ },
+];
+export const tipoInfo = (id) => TIPOS.find((x) => x.id === id) || TIPOS.at(-1);
 
 // ---------------- Treino: histórico e recordes ----------------
 const seriesOk = (dia, exId) => ((dia?.series || {})[exId] || []).filter((s) => s && s.ok && (Number(s.kg) > 0 || Number(s.reps) > 0));

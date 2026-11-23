@@ -30,10 +30,10 @@ service cloud.firestore {
         && request.resource.data.parceiros.size() <= 5;
     }
 
-    // Registro do dia e fotos das refeições: o dono grava, a dupla lê e reage.
+    // Registro do dia, fotos das refeições e check-ins: o dono grava, a dupla lê e reage.
     match /feed/{uid}/{colecao}/{docId} {
-      allow read: if (eu(uid) || parceiroDe(uid)) && colecao in ['dias', 'fotos'];
-      allow write: if eu(uid) && colecao in ['dias', 'fotos'];
+      allow read: if (eu(uid) || parceiroDe(uid)) && colecao in ['dias', 'fotos', 'checkins'];
+      allow write: if eu(uid) && colecao in ['dias', 'fotos', 'checkins'];
       allow update: if colecao == 'dias' && parceiroDe(uid) && mudou().hasOnly(['reacoes']);
     }
 
@@ -46,6 +46,70 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.expira is int
         && request.resource.data.expira <= request.time.toMillis() + 1800000 + 60000;
+    }
+
+    // Desafios (estilo GymRats). Só os membros veem. Quem cria só pode colocar gente da própria dupla;
+    // os outros entram com um código de entrada.
+    match /desafios/{id} {
+      function membros() { return request.resource.data.membros; }
+      function novos() { return membros().toSet().difference(resource.data.membros.toSet()); }
+      function saiu() { return resource.data.membros.toSet().difference(membros().toSet()); }
+      function minhaDupla() { return get(/databases/$(database)/documents/perfis/$(request.auth.uid)).data.get('parceiros', []).toSet(); }
+      function soMeuPerfil() { return request.resource.data.get('perfis', {}).diff(resource.data.get('perfis', {})).affectedKeys().hasOnly([request.auth.uid]); }
+      function entrada() { return get(/databases/$(database)/documents/entradas/$(request.resource.data.entrada)).data; }
+
+      allow read: if logado() && request.auth.uid in resource.data.membros;
+      allow create: if logado()
+        && request.resource.data.dono == request.auth.uid
+        && request.auth.uid in membros()
+        && membros().size() <= 20
+        && membros().toSet().difference([request.auth.uid].toSet()).difference(minhaDupla()).size() == 0;
+      // O dono edita tudo e só acrescenta gente da dupla dele.
+      allow update: if logado() && resource.data.dono == request.auth.uid
+        && request.resource.data.dono == request.auth.uid
+        && membros().size() <= 20
+        && novos().difference(minhaDupla()).size() == 0;
+      // Membro atualiza o próprio nome/foto ou sai.
+      allow update: if logado() && request.auth.uid in resource.data.membros
+        && mudou().hasOnly(['membros', 'perfis'])
+        && novos().size() == 0
+        && saiu().difference([request.auth.uid].toSet()).size() == 0
+        && soMeuPerfil();
+      // Quem tem um código de entrada válido deste desafio se coloca na lista.
+      allow update: if logado()
+        && mudou().hasOnly(['membros', 'perfis', 'entrada'])
+        && request.resource.data.entrada is string
+        && entrada().desafio == id
+        && entrada().expira > request.time.toMillis()
+        && novos() == [request.auth.uid].toSet()
+        && saiu().size() == 0
+        && membros().size() <= 20
+        && soMeuPerfil();
+      allow delete: if logado() && resource.data.dono == request.auth.uid;
+
+      // Check-ins (sem foto) e fotos: cada um grava os seus; os membros leem e reagem.
+      match /{colecao}/{cid} {
+        function membroD() { return logado() && request.auth.uid in get(/databases/$(database)/documents/desafios/$(id)).data.membros; }
+        allow read: if membroD() && colecao in ['checkins', 'fotos'];
+        allow create: if membroD() && colecao in ['checkins', 'fotos'] && request.resource.data.uid == request.auth.uid;
+        allow update: if membroD() && colecao in ['checkins', 'fotos'] && (
+          (resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid)
+          || (colecao == 'checkins' && mudou().hasOnly(['reacoes'])
+              && request.resource.data.get('reacoes', {}).diff(resource.data.get('reacoes', {})).affectedKeys().hasOnly([request.auth.uid])));
+        allow delete: if logado() && colecao in ['checkins', 'fotos'] && resource.data.uid == request.auth.uid;
+      }
+    }
+
+    // Código para entrar num desafio: só um membro cria, vale até 7 dias. Ninguém lista.
+    match /entradas/{cod} {
+      allow get: if logado();
+      allow delete: if logado() && resource.data.uid == request.auth.uid;
+      allow create: if logado()
+        && request.resource.data.keys().hasOnly(['uid', 'nome', 'desafio', 'expira'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.expira is int
+        && request.resource.data.expira <= request.time.toMillis() + 7 * 86400000 + 60000
+        && request.auth.uid in get(/databases/$(database)/documents/desafios/$(request.resource.data.desafio)).data.membros;
     }
 
     match /{document=**} {

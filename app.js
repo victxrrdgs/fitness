@@ -1,7 +1,7 @@
-import { criarStore, modoLocal, CONVITE_MIN } from './store.js?v=0.2';
-import * as C from './calc.js?v=0.2';
+import { criarStore, modoLocal, CONVITE_MIN, ENTRADA_DIAS } from './store.js?v=0.3';
+import * as C from './calc.js?v=0.3';
 
-const VERSAO = '0.2';
+const VERSAO = '0.3';
 const MAX_PARCEIROS = 5;
 const DIAS_EDITAVEIS = 2; // dá para corrigir até anteontem
 const JANELA_MAPA = 60; // dias publicados no perfil para a dupla
@@ -26,8 +26,13 @@ let tela = 'hoje';
 let dataSel = C.hoje();
 let mesSel = C.hoje().slice(0, 7);
 let syncStatus = '';
-const D = { perfil: undefined, prefs: {}, plano: null, dias: [], pesos: [], fotos: [] };
-const P = {}; // parceiros: { [uid]: { perfil, dias, fotos, paradas } }
+const D = { perfil: undefined, prefs: {}, plano: null, dias: [], pesos: [], fotos: [], checkins: [], desafios: [] };
+const P = {}; // parceiros: { [uid]: { perfil, dias, fotos, checkins, paradas } }
+const DS = {}; // desafio aberto: { [id]: { checkins, parada } }
+const fotosDesafio = {}; // { [checkinId]: [dataURL] | 'carregando' }
+let aba = 'desafios'; // tela "Juntos": desafios | dupla
+let desafioSel = null;
+let checkinPendente = null; // abrir o check-in assim que os dados chegarem (link ou compartilhamento)
 let paradas = [];
 let paradaFotos = null;
 let parceirosAssinados = '';
@@ -36,7 +41,7 @@ let ultimoPublicado = '';
 const prefs = () => ({ metaRefeicoes: 80, metaAgua: 2500, descanso: 90, ...D.prefs });
 const diaDoc = (d) => D.dias.find((x) => x.id === d);
 const editavel = (d) => d <= C.hoje() && d >= C.somarDias(C.hoje(), -DIAS_EDITAVEIS);
-const inicio = () => D.perfil?.inicio || C.hoje();
+const inicio = () => C.inicioEfetivo(D.perfil?.inicio);
 const primeiroNome = (n) => String(n || '').split(' ')[0] || 'você';
 
 function toast(msg, ms = 2600) {
@@ -71,6 +76,7 @@ function pararTudo() {
   paradas.forEach((f) => f()); paradas = [];
   if (paradaFotos) paradaFotos(); paradaFotos = null;
   for (const k of Object.keys(P)) { P[k].paradas.forEach((f) => f()); delete P[k]; }
+  for (const k of Object.keys(DS)) { DS[k].parada(); delete DS[k]; }
   parceirosAssinados = '';
 }
 
@@ -82,7 +88,7 @@ function mostrarLogin() {
 
 function mostrarApp() {
   pararTudo();
-  Object.assign(D, { perfil: undefined, prefs: {}, plano: null, dias: [], pesos: [], fotos: [] });
+  Object.assign(D, { perfil: undefined, prefs: {}, plano: null, dias: [], pesos: [], fotos: [], checkins: [], desafios: [] });
   ultimoPublicado = '';
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
@@ -107,11 +113,21 @@ function mostrarApp() {
     store.assinarDoc(['usuarios', uid, 'config', 'plano'], (p) => { D.plano = p; agendarRender(); }),
     store.assinarCol(['feed', uid, 'dias'], (l) => { D.dias = l; agendarRender(); }),
     store.assinarCol(['usuarios', uid, 'pesos'], (l) => { D.pesos = l.sort((a, b) => (a.id < b.id ? -1 : 1)); agendarRender(); }),
+    store.assinarCol(['desafios'], (l) => { D.desafios = l.sort((a, b) => (a.inicio < b.inicio ? 1 : -1)); sincronizarDesafios(); agendarRender(); }, ['membros', 'array-contains', uid]),
   ];
   assinarFotos();
-  const acao = new URLSearchParams(location.search).get('acao');
+  const q = new URLSearchParams(location.search);
+  const acao = q.get('acao');
   if (acao === 'treino') tela = 'treino';
-  else if (acao === 'dupla') tela = 'dupla';
+  else if (acao === 'dupla') { tela = 'dupla'; aba = 'dupla'; } else if (acao === 'desafios') { tela = 'dupla'; aba = 'desafios'; } else if (acao === 'checkin') {
+    // Link de atalho (iPhone: app Atalhos) ou compartilhamento do Samsung Health / Apple Fitness.
+    const pre = C.lerResumoTreino(q.get('texto') || '');
+    for (const [k, campo] of [['min', 'minutos'], ['kcal', 'kcal'], ['km', 'km']]) if (q.get(k)) pre[campo] = Number(String(q.get(k)).replace(',', '.')) || undefined;
+    if (q.get('tipo')) Object.assign(pre, { tipo: C.lerResumoTreino(q.get('tipo')).tipo || 'outro', titulo: pre.titulo || q.get('tipo') });
+    if (q.get('titulo')) pre.titulo = q.get('titulo');
+    if (q.get('fonte')) pre.fonte = q.get('fonte');
+    checkinPendente = { pre, compartilhado: q.has('compartilhado') };
+  }
   if (acao) history.replaceState(null, '', location.pathname);
   agendarRender();
 }
@@ -119,7 +135,22 @@ function mostrarApp() {
 function assinarFotos() {
   if (paradaFotos) paradaFotos();
   const d = dataSel;
-  paradaFotos = store.assinarCol(['feed', uid, 'fotos'], (l) => { D.fotos = l.filter((f) => f.data === d); agendarRender(); }, ['data', '==', d]);
+  const a = store.assinarCol(['feed', uid, 'fotos'], (l) => { D.fotos = l.filter((f) => f.data === d); agendarRender(); }, ['data', '==', d]);
+  const b = store.assinarCol(['feed', uid, 'checkins'], (l) => { D.checkins = l.filter((f) => f.data === d).sort((x, y) => x.em - y.em); agendarRender(); }, ['data', '==', d]);
+  paradaFotos = () => { a(); b(); };
+}
+
+// Fotos dos check-ins do desafio: carrega só as que aparecem na tela.
+function fotosDoCheckin(dId, c) {
+  if (c.uid === uid) { const meu = D.checkins.find((x) => x.id === c.id); if (meu) return meu.fotos || []; }
+  const f = fotosDesafio[c.id];
+  if (Array.isArray(f)) return f;
+  if (!f && c.nFotos) {
+    fotosDesafio[c.id] = 'carregando';
+    store.lerDoc(['desafios', dId, 'fotos', c.id]).then((x) => { fotosDesafio[c.id] = x?.fotos || []; agendarRender(); })
+      .catch(() => { fotosDesafio[c.id] = []; });
+  }
+  return [];
 }
 
 function assinarParceiros() {
@@ -131,11 +162,12 @@ function assinarParceiros() {
   const h = C.hoje();
   for (const p of lista) {
     if (P[p]) continue;
-    const o = P[p] = { perfil: null, dias: [], fotos: [], paradas: [] };
+    const o = P[p] = { perfil: null, dias: [], fotos: [], checkins: [], paradas: [] };
     o.paradas.push(
       store.assinarDoc(['perfis', p], (x) => { o.perfil = x; agendarRender(); }),
       store.assinarCol(['feed', p, 'dias'], (l) => { o.dias = l; agendarRender(); }),
       store.assinarCol(['feed', p, 'fotos'], (l) => { o.fotos = l.filter((f) => f.data === h); agendarRender(); }, ['data', '==', h]),
+      store.assinarCol(['feed', p, 'checkins'], (l) => { o.checkins = l.filter((f) => f.data === h).sort((a, b) => a.em - b.em); agendarRender(); }, ['data', '==', h]),
     );
   }
 }
@@ -184,7 +216,7 @@ function mapaParceiro(pf) {
   const mapa = { ...(pf?.mapa || {}) };
   const ate = pf?.atualizado || '';
   for (const d of C.diasEntre(C.somarDias(h, -JANELA_MAPA), h)) {
-    if (d < (pf?.inicio || h)) continue;
+    if (d < C.inicioEfetivo(pf?.inicio)) continue;
     if (!mapa[d] || (mapa[d] === 'pendente' && d < h)) mapa[d] = d >= ate ? 'semdados' : 'falhou';
   }
   return mapa;
@@ -193,7 +225,7 @@ function mapaParceiro(pf) {
 function ofensivaComParceiro(pf) {
   const meu = minhaOfensiva().mapa;
   const dele = mapaParceiro(pf);
-  const ini = [inicio(), pf?.inicio || C.hoje(), C.somarDias(C.hoje(), -JANELA_MAPA + 1)].sort().at(-1);
+  const ini = [inicio(), C.inicioEfetivo(pf?.inicio), C.somarDias(C.hoje(), -JANELA_MAPA + 1)].sort().at(-1);
   const neutro = Object.fromEntries(Object.entries(dele).map(([d, v]) => [d, v === 'semdados' ? 'gelo' : v]));
   return C.ofensivaDupla(ini, meu, neutro);
 }
@@ -270,11 +302,35 @@ function render() {
   $('#dia-pill').style.visibility = tela === 'hoje' || tela === 'treino' ? 'visible' : 'hidden';
   $('#dia-label').textContent = rotuloCurto(dataSel);
   $('#dia-prox').disabled = dataSel >= C.somarDias(C.hoje(), 6);
-  $$('.dock button[data-tela]').forEach((b) => b.classList.toggle('active', b.dataset.tela === (tela === 'treino' ? 'hoje' : tela)));
-  const fn = { hoje: telaHoje, treino: telaTreino, dupla: telaDupla, progresso: telaProgresso, plano: telaPlano, perfil: telaPerfil }[tela] || telaHoje;
+  $$('.dock button[data-tela]').forEach((b) => b.classList.toggle('active', b.dataset.tela === ({ treino: 'hoje', desafio: 'dupla' }[tela] || tela)));
+  const fn = { hoje: telaHoje, treino: telaTreino, dupla: telaJuntos, desafio: telaDesafio, progresso: telaProgresso, plano: telaPlano, perfil: telaPerfil }[tela] || telaHoje;
   const y = window.scrollY;
   $('#conteudo').innerHTML = fn();
   window.scrollTo(0, y);
+  if (checkinPendente && $('#modal').classList.contains('hidden')) {
+    const { pre, compartilhado } = checkinPendente; checkinPendente = null;
+    (compartilhado ? lerCompartilhado() : Promise.resolve({ arquivos: [], texto: '' })).then(async ({ arquivos, texto }) => {
+      const doTexto = C.lerResumoTreino(texto);
+      const fotos = [];
+      for (const f of arquivos.slice(0, 2)) { try { fotos.push(await comprimir(f)); } catch (e) { /* ignora */ } }
+      dataSel = C.hoje(); assinarFotos();
+      modalCheckin({ ...doTexto, ...pre, fotos });
+    }).catch((e) => { console.error(e); toast('Não foi possível abrir o check-in.'); });
+  }
+}
+
+// Arquivos e texto que chegaram pelo "Compartilhar" do celular (o sw.js guarda no cache).
+async function lerCompartilhado() {
+  const out = { arquivos: [], texto: '' };
+  try {
+    const c = await caches.open('folego-compartilhado');
+    for (const req of await c.keys()) {
+      const r = await c.match(req);
+      if (req.url.endsWith('/texto')) { const j = await r.json(); out.texto = [j.title, j.text, j.url].filter(Boolean).join('\n'); } else out.arquivos.push(new File([await r.blob()], 'compartilhado', { type: r.headers.get('content-type') || 'image/jpeg' }));
+      await c.delete(req);
+    }
+  } catch (e) { /* sem cache */ }
+  return out;
 }
 
 const ringHTML = (pct, centro, ok) => {
@@ -321,6 +377,7 @@ function telaHoje() {
     sub = (d === h ? 'Para cumprir o dia falta ' : 'Faltou ') + falta.join(' e ') + '.';
     if (!ed && d < h) sub += ' (já fechou)';
   }
+  if (plano && inicio() > h && d <= h) sub = `Dia de teste: a ofensiva começa ${inicio() === C.somarDias(h, 1) ? 'amanhã' : 'em ' + esc(C.paraData(inicio()).toLocaleDateString('pt-BR'))}. Hoje não conta. 😉`;
   const pct = Math.round(av.progresso * 100);
   html += `<div class="hoje-hero fade-in"><div class="txt"><div class="ola">${titulo}</div><div class="sub">${sub}</div></div>${plano && !futuro ? ringHTML(av.progresso, `${av.cumprido ? '✓' : pct + '%'}<small>${av.cumprido ? 'cumprido' : 'do dia'}</small>`, av.cumprido) : ''}</div>`;
 
@@ -337,6 +394,7 @@ function telaHoje() {
 
   if (!plano) {
     html += `<div class="vazio g"><span class="big">📋</span>Ainda não há plano.<br>Cole o treino e a dieta (os que o Claude montou, por exemplo) e o app organiza o seu dia.<div class="acoes"><button class="btn lime" data-a="editar-plano">Montar meu plano</button></div></div>`;
+    if (!futuro) html += secaoCheckins(d, ed);
     return html;
   }
 
@@ -360,6 +418,7 @@ function telaHoje() {
     html += `<div class="treino-card g"><div class="lbl">🏋️ Treino</div><div class="nome">Dia de descanso 😌</div><div class="m">Sem treino na agenda. Hidrate-se e siga a dieta.</div>
       ${ed && plano.treinos.length ? '<button class="link" style="margin-top:12px;position:relative" data-a="trocar-treino">Treinar mesmo assim</button>' : ''}</div>`;
   }
+  if (!futuro) html += secaoCheckins(d, ed);
 
   // Refeições
   const refs = plano.refeicoes || [];
@@ -398,6 +457,149 @@ function telaHoje() {
       <div class="barra"><div style="width:${Math.min(100, (ag / meta) * 100)}%"></div></div></div></div>`;
   }
   return html;
+}
+
+// ---------- Check-in (prova do treino, estilo GymRats) ----------
+const duracaoTxt = (m) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? String(m % 60).padStart(2, '0') : ''}` : `${m} min`);
+function resumoCheckin(c) {
+  const t = C.tipoInfo(c.tipo);
+  return [c.minutos ? duracaoTxt(c.minutos) : '', c.km ? `${num(c.km)} km` : '', c.kcal ? `${c.kcal} kcal` : '', c.academia ? `📍 ${c.academia}` : ''].filter(Boolean).map(esc).join(' · ') || esc(t.nome);
+}
+
+function secaoCheckins(d, ed) {
+  const lista = D.checkins.filter((c) => c.data === d);
+  const ativos = desafiosAtivos(d).length;
+  if (!lista.length) {
+    if (!ed) return '';
+    return `<div class="sec"><button class="checkin-cta g" data-a="checkin"><span class="e">📸</span><span class="info"><b>Fazer check-in</b><small>Foto, tempo e local do treino${ativos ? ` · conta em ${plural(ativos, 'desafio', 'desafios')}` : ''}</small></span><span class="seta">›</span></button></div>`;
+  }
+  return `<div class="sec"><div class="sec-h"><h3>📸 Check-in${lista.length > 1 ? 's' : ''}</h3>${ed ? '<button data-a="checkin">+ Novo</button>' : ''}</div><div class="list g">`
+    + lista.map((c) => `<div class="row clic" data-a="ver-checkin" data-id="${c.id}">${(c.fotos || [])[0] ? `<img class="thumb" src="${c.fotos[0]}" alt="">` : `<div class="ic">${C.tipoInfo(c.tipo).e}</div>`}
+      <div class="info"><div class="t">${C.tipoInfo(c.tipo).e} ${esc(c.titulo || C.tipoInfo(c.tipo).nome)}</div><div class="m">${resumoCheckin(c)}</div></div><span class="seta">›</span></div>`).join('')
+    + '</div></div>';
+}
+
+// Desafios em que um check-in desta data entra.
+const desafiosAtivos = (d) => D.desafios.filter((x) => x.inicio <= d && d <= x.fim);
+
+function modalCheckin(pre = {}, existente = null) {
+  const c = existente || {};
+  const hoje = C.hoje();
+  const dataPadrao = existente?.data || (editavel(dataSel) ? dataSel : hoje);
+  const treino = C.treinoDoDia(D.plano, dataPadrao, diaDoc(dataPadrao));
+  const v = {
+    tipo: c.tipo || pre.tipo || (treino ? 'musculacao' : ''),
+    titulo: c.titulo ?? pre.titulo ?? (treino?.nome || ''),
+    minutos: c.minutos || pre.minutos || '',
+    kcal: c.kcal || pre.kcal || '',
+    km: c.km || pre.km || '',
+    academia: c.academia ?? (pre.academia || prefs().ultimaAcademia || ''),
+    nota: c.nota || '',
+    fonte: c.fonte || pre.fonte || 'manual',
+  };
+  let fotos = [...(c.fotos || pre.fotos || [])];
+  const academias = prefs().academias || [];
+  const datas = [0, 1, 2].map((n) => C.somarDias(hoje, -n));
+  abrirModal(existente ? 'Editar check-in' : 'Check-in', `<form id="f-checkin">
+    <div class="ck-fotos" id="ck-fotos"></div>
+    <div class="linha"><button type="button" class="btn" data-foto="camera">📷 Tirar foto</button><button type="button" class="btn" data-foto="galeria">🖼️ Galeria / print</button></div>
+    <input type="file" name="cam" accept="image/*" capture="environment" hidden><input type="file" name="gal" accept="image/*" multiple hidden>
+    <p class="rodape" style="margin-top:8px;text-align:left">A foto é a prova do treino (pode ser você na academia ou o print do Samsung Health / Apple Fitness). Até 2 fotos.</p>
+    <label>Dia</label><div class="seg">${datas.map((x) => `<label><input type="radio" name="data" value="${x}" ${x === dataPadrao ? 'checked' : ''}>${esc(rotuloCurto(x))}</label>`).join('')}</div>
+    <label>Atividade</label><div class="chips">${C.TIPOS.map((t) => `<label><input type="radio" name="tipo" value="${t.id}" ${t.id === v.tipo ? 'checked' : ''}>${t.e} ${esc(t.nome)}</label>`).join('')}</div>
+    <label>Título <small>(opcional)</small></label><input name="titulo" value="${esc(v.titulo)}" placeholder="Ex.: Treino A · Superiores">
+    <div class="linha"><div><label>Duração (min)</label><input name="minutos" inputmode="numeric" value="${esc(v.minutos)}" placeholder="60" required></div>
+      <div><label>Calorias</label><input name="kcal" inputmode="numeric" value="${esc(v.kcal)}" placeholder="opcional"></div>
+      <div><label>Km</label><input name="km" inputmode="decimal" value="${esc(v.km ? num(v.km) : '')}" placeholder="opcional"></div></div>
+    <label>Onde treinou</label><input name="academia" list="lista-academias" value="${esc(v.academia)}" placeholder="Ex.: Smart Fit Paulista, casa, parque">
+    <datalist id="lista-academias">${academias.map((a) => `<option value="${esc(a)}">`).join('')}</datalist>
+    <label>Comentário <small>(opcional)</small></label><input name="nota" value="${esc(v.nota)}" placeholder="Como foi?">
+    <div id="ck-desafios"></div>
+    <p id="ck-erro" class="erro"></p>
+    <div class="acoes">${existente ? '<button type="button" class="btn danger" data-apagar>Apagar</button>' : ''}<button class="btn lime">${existente ? 'Salvar' : 'Fazer check-in ✓'}</button></div>
+  </form>`, (el) => {
+    const f = el.querySelector('form');
+    const desenharFotos = () => {
+      el.querySelector('#ck-fotos').innerHTML = fotos.map((src, i) => `<div><img src="${src}" alt=""><button type="button" data-tirar="${i}" aria-label="Tirar foto">✕</button></div>`).join('')
+        || '<div class="ck-vazio">📸<small>Sem foto ainda</small></div>';
+    };
+    const marcados = new Set(existente ? existente.desafios || [] : desafiosAtivos(dataPadrao).map((x) => x.id));
+    const desenharDesafios = () => {
+      const lista = desafiosAtivos(f.data.value);
+      el.querySelector('#ck-desafios').innerHTML = lista.length ? `<label>Conta nos desafios</label>${lista.map((x) => `<label class="chk-l"><input type="checkbox" name="desafio" value="${x.id}" ${marcados.has(x.id) ? 'checked' : ''}>🏆 ${esc(x.nome)}</label>`).join('')}` : '';
+    };
+    desenharFotos(); desenharDesafios();
+    f.addEventListener('change', (e) => {
+      if (e.target.name === 'data') desenharDesafios();
+      if (e.target.name === 'desafio') e.target.checked ? marcados.add(e.target.value) : marcados.delete(e.target.value);
+    });
+    el.addEventListener('click', (e) => {
+      const bf = e.target.closest('[data-foto]');
+      if (bf) { (bf.dataset.foto === 'camera' ? f.cam : f.gal).click(); return; }
+      const bt = e.target.closest('[data-tirar]');
+      if (bt) { fotos.splice(Number(bt.dataset.tirar), 1); desenharFotos(); }
+    });
+    const addFotos = async (ev) => {
+      const arqs = [...ev.target.files]; ev.target.value = '';
+      for (const a of arqs) { if (fotos.length >= 2) break; try { fotos.push(await comprimir(a)); } catch (err) { toast('Não foi possível ler a foto.'); } }
+      desenharFotos();
+    };
+    f.cam.addEventListener('change', addFotos); f.gal.addEventListener('change', addFotos);
+    el.querySelector('[data-apagar]')?.addEventListener('click', () => { apagarCheckin(existente); fecharModal(); toast('Check-in apagado'); });
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const erro = el.querySelector('#ck-erro');
+      const minutos = Math.round(Number(String(f.minutos.value).replace(',', '.')));
+      if (!fotos.length) { erro.textContent = 'Coloque pelo menos uma foto (é a prova do treino).'; return; }
+      if (!(minutos > 0 && minutos < 1000)) { erro.textContent = 'Informe a duração em minutos.'; return; }
+      const tipo = f.tipo.value || 'outro';
+      const n = (x) => { const y = Number(String(x).replace(',', '.')); return y > 0 ? y : null; };
+      const dados = {
+        data: f.data.value, tipo, titulo: f.titulo.value.trim(), minutos,
+        kcal: n(f.kcal.value) && Math.round(n(f.kcal.value)), km: n(f.km.value),
+        academia: f.academia.value.trim(), nota: f.nota.value.trim(), fonte: v.fonte, fotos,
+        desafios: desafiosAtivos(f.data.value).map((x) => x.id).filter((x) => marcados.has(x)),
+      };
+      salvarCheckin(dados, existente);
+      fecharModal();
+      toast(existente ? 'Check-in atualizado' : `Check-in feito ✓${dados.desafios.length ? ' 🏆' : ''}`);
+    });
+  });
+}
+
+function salvarCheckin(dados, existente) {
+  const id = existente?.id || store.novoId();
+  const doc = { ...dados, uid, nome: usuario.displayName || '', foto: usuario.photoURL || '', em: existente?.em || Date.now(), atualizado: Date.now() };
+  // Na hora, para a tela não esperar o Firestore
+  D.checkins = [...D.checkins.filter((x) => x.id !== id), ...(doc.data === dataSel ? [{ id, ...doc }] : [])];
+  store.definir(['feed', uid, 'checkins', id], doc, false);
+  const { fotos, ...meta } = doc;
+  for (const d of existente?.desafios || []) {
+    if (!doc.desafios.includes(d)) { store.remover(['desafios', d, 'checkins', id]); store.remover(['desafios', d, 'fotos', id]); }
+  }
+  for (const d of doc.desafios) {
+    store.definir(['desafios', d, 'checkins', id], { ...meta, nFotos: fotos.length }, true);
+    store.definir(['desafios', d, 'fotos', id], { uid, fotos }, false);
+  }
+  // Guarda a academia para sugerir da próxima vez
+  if (doc.academia) {
+    const lista = [doc.academia, ...(prefs().academias || []).filter((a) => a !== doc.academia)].slice(0, 8);
+    salvarPrefs({ academias: lista, ultimaAcademia: doc.academia });
+  }
+  // Check-in conta como treino feito no dia (se o plano tinha treino)
+  const dia = diaDoc(doc.data) || {};
+  if (editavel(doc.data) && !dia.treinoFeito && avaliar(doc.data).temTreino) {
+    const t = C.treinoDoDia(D.plano, doc.data, dia);
+    salvarDia(doc.data, { treinoFeito: true, treinoId: t?.id ?? null });
+  }
+  agendarRender();
+}
+
+function apagarCheckin(c) {
+  store.remover(['feed', uid, 'checkins', c.id]);
+  for (const d of c.desafios || []) { store.remover(['desafios', d, 'checkins', c.id]); store.remover(['desafios', d, 'fotos', c.id]); }
+  D.checkins = D.checkins.filter((x) => x.id !== c.id);
+  agendarRender();
 }
 
 // ---------- Treino ----------
@@ -490,10 +692,207 @@ function bip() {
   } catch (e) { /* sem som */ }
 }
 
+// ---------- Juntos: desafios e dupla ----------
+function telaJuntos() {
+  const seg = `<div class="abas">${[['desafios', '🏆 Desafios'], ['dupla', '🤝 Dupla']].map(([k, n]) => `<button class="${aba === k ? 'on' : ''}" data-a="aba" data-id="${k}">${n}</button>`).join('')}</div>`;
+  return `<div class="hero fade-in" style="padding-bottom:14px"><div class="ola">Juntos</div></div>${seg}${aba === 'dupla' ? telaDupla() : telaDesafios()}`;
+}
+
+const eu = () => ({ nome: usuario.displayName || 'Sem nome', foto: usuario.photoURL || '' });
+const pessoaDesafio = (d, u) => (u === uid ? eu() : d.perfis?.[u] || P[u]?.perfil || { nome: 'Alguém', foto: '' });
+const medalha = (pos) => ['🥇', '🥈', '🥉'][pos - 1] || `${pos}º`;
+const pontosTxt = (d, p) => (d.criterio === 'minutos' ? duracaoTxt(p.minutos) : plural(p.dias, 'dia', 'dias'));
+const dataCurta = (s) => C.paraData(s).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '');
+
+function faseTxt(d, st) {
+  if (st.fase === 'futuro') return `Começa ${st.faltam === 1 ? 'amanhã' : `em ${st.faltam} dias`} (${dataCurta(d.inicio)})`;
+  if (st.fase === 'encerrado') return `Encerrado em ${dataCurta(d.fim)}`;
+  return `Dia ${st.dia} de ${st.total} · ${st.restam ? `faltam ${plural(st.restam, 'dia', 'dias')}` : 'último dia!'}`;
+}
+
+function sincronizarDesafios() {
+  const ids = D.desafios.map((x) => x.id);
+  for (const k of Object.keys(DS)) if (!ids.includes(k)) { DS[k].parada(); delete DS[k]; }
+  for (const id of ids) {
+    if (DS[id]) continue;
+    const o = DS[id] = { checkins: [], parada: () => {} };
+    o.parada = store.assinarCol(['desafios', id, 'checkins'], (l) => { o.checkins = l.sort((a, b) => b.em - a.em); agendarRender(); });
+  }
+}
+
+function telaDesafios() {
+  let html = '';
+  if (!D.desafios.length) {
+    return `<div class="vazio g" style="margin-top:14px"><span class="big">🏆</span>Crie um desafio com começo e fim. Cada treino vira um check-in com foto, tempo e local, e o placar mostra quem treinou mais.
+      <div class="acoes"><button class="btn lime" data-a="novo-desafio">Criar desafio</button><button class="btn" data-a="entrar-desafio">Tenho um código</button></div></div>`;
+  }
+  const ordem = { ativo: 0, futuro: 1, encerrado: 2 };
+  const lista = D.desafios.map((d) => ({ d, st: C.statusDesafio(d) })).sort((a, b) => ordem[a.st.fase] - ordem[b.st.fase]);
+  for (const { d, st } of lista) {
+    const placar = C.placarDesafio(d, DS[d.id]?.checkins || []);
+    const meu = placar.find((p) => p.uid === uid);
+    html += `<button class="desafio g fade-in ${st.fase}" data-a="abrir-desafio" data-id="${d.id}">
+      <div class="d-top"><div class="info"><div class="t">🏆 ${esc(d.nome)}</div><div class="m">${esc(faseTxt(d, st))}</div></div>${meu?.pontos && st.fase !== 'futuro' ? `<div class="pos">${medalha(meu.pos)}</div>` : ''}</div>
+      <div class="barra"><div style="width:${st.fase === 'futuro' ? 0 : Math.round((st.dia / st.total) * 100)}%"></div></div>
+      <div class="d-placar">${placar.slice(0, 3).map((p) => { const pe = pessoaDesafio(d, p.uid); return `<span>${avatarHTML(pe.foto, pe.nome)}<b>${esc(primeiroNome(pe.nome))}</b><small>${esc(pontosTxt(d, p))}</small></span>`; }).join('')}</div>
+    </button>`;
+  }
+  html += '<div class="acoes"><button class="btn" data-a="novo-desafio">+ Criar desafio</button><button class="btn" data-a="entrar-desafio">Tenho um código</button></div>';
+  return html;
+}
+
+function telaDesafio() {
+  const d = D.desafios.find((x) => x.id === desafioSel);
+  if (!d) { tela = 'dupla'; return telaJuntos(); }
+  const st = C.statusDesafio(d);
+  const cks = DS[d.id]?.checkins || [];
+  const placar = C.placarDesafio(d, cks);
+  const h = C.hoje();
+  const fezHoje = cks.some((c) => c.uid === uid && c.data === h);
+  let html = `<div class="treino-head fade-in"><button class="voltar" data-a="ir" data-id="dupla">‹ Desafios</button>
+    <div class="d-head"><h2>🏆 ${esc(d.nome)}</h2><button class="ico g" data-a="menu-desafio" data-id="${d.id}" aria-label="Opções">⋯</button></div>
+    <div class="m">${esc(dataCurta(d.inicio))} – ${esc(dataCurta(d.fim))} · ${d.criterio === 'minutos' ? 'ganha quem somar mais minutos' : 'ganha quem treinar mais dias'} · ${plural(d.membros.length, 'pessoa', 'pessoas')}</div>
+    ${d.descricao ? `<div class="d-desc">${esc(d.descricao)}</div>` : ''}</div>
+    <div class="card g"><div class="lbl">${esc(faseTxt(d, st))}</div><div class="barra" style="margin-top:10px"><div style="width:${st.fase === 'futuro' ? 0 : Math.round((st.dia / st.total) * 100)}%"></div></div>
+      <div class="acoes" style="margin-top:14px">${st.fase === 'ativo' ? `<button class="btn ${fezHoje ? '' : 'lime'}" data-a="checkin">${fezHoje ? '+ Outro check-in' : '📸 Fazer check-in'}</button>` : ''}<button class="btn" data-a="convidar-desafio" data-id="${d.id}">Convidar</button></div></div>`;
+
+  html += `<div class="sec"><div class="sec-h"><h3>Placar</h3><span class="tag green">${d.criterio === 'minutos' ? 'minutos' : 'dias ativos'}</span></div><div class="list g">`
+    + placar.map((p) => {
+      const pe = pessoaDesafio(d, p.uid);
+      return `<div class="row ${p.uid === uid ? 'eu' : ''}"><div class="pos-n">${p.pontos ? medalha(p.pos) : '–'}</div>${avatarHTML(pe.foto, pe.nome)}
+        <div class="info"><div class="t">${esc(pe.nome)}${p.saiu ? ' <small>(saiu)</small>' : ''}</div><div class="m">${plural(p.dias, 'dia', 'dias')} · ${duracaoTxt(p.minutos)} · ${plural(p.checkins, 'check-in', 'check-ins')}</div></div>
+        <div class="v">${esc(pontosTxt(d, p))}</div></div>`;
+    }).join('') + '</div></div>';
+
+  html += '<div class="sec"><div class="sec-h"><h3>Atividade</h3></div>';
+  if (!cks.length) html += `<div class="vazio g">${st.fase === 'futuro' ? 'O desafio ainda não começou. Os check-ins aparecem aqui a partir do primeiro dia.' : 'Nenhum check-in ainda. Seja a primeira pessoa! 💪'}</div>`;
+  for (const c of cks.slice(0, 40)) {
+    const pe = pessoaDesafio(d, c.uid);
+    const t = C.tipoInfo(c.tipo);
+    const fotos = fotosDoCheckin(d.id, c);
+    const reac = Object.entries(c.reacoes || {}).filter(([, v]) => v);
+    const minha = c.reacoes?.[uid];
+    const conta = (e) => reac.filter(([, v]) => v === e).length;
+    html += `<div class="ck g">
+      <div class="ck-top">${avatarHTML(pe.foto, pe.nome)}<div class="info"><div class="t">${esc(primeiroNome(pe.nome))}</div><div class="m">${esc(C.rotuloDia(c.data))}${c.data < d.inicio || c.data > d.fim ? ' · fora do período' : ''}</div></div>${c.uid === uid ? `<button class="link" data-a="ver-checkin-d" data-d="${d.id}" data-id="${c.id}">Editar</button>` : ''}</div>
+      ${fotos.length ? `<div class="ck-imgs n${fotos.length}">${fotos.map((src, i) => `<img src="${src}" alt="" data-a="ver-img-ck" data-d="${d.id}" data-id="${c.id}" data-i="${i}">`).join('')}</div>` : c.nFotos ? '<div class="ck-imgs carregando"></div>' : ''}
+      <div class="ck-t">${t.e} ${esc(c.titulo || t.nome)}</div>
+      <div class="ck-m">${resumoCheckin(c)}</div>
+      ${c.nota ? `<div class="ck-nota">“${esc(c.nota)}”</div>` : ''}
+      <div class="reacoes">${['🔥', '💪', '👏', '❤️'].map((e) => `<button class="${minha === e ? 'on' : ''}" data-a="reagir-ck" data-d="${d.id}" data-id="${c.id}" data-v="${e}">${e}${conta(e) ? ` <small>${conta(e)}</small>` : ''}</button>`).join('')}</div>
+    </div>`;
+  }
+  return html + '</div>';
+}
+
+function modalDesafio(existente = null) {
+  const d = existente || {};
+  const amanha = C.somarDias(C.hoje(), 1);
+  const ini = d.inicio || amanha;
+  const fim = d.fim || C.somarDias(ini, 29);
+  const dupla = (D.perfil?.parceiros || []).filter((x) => x !== uid && !(d.membros || []).includes(x));
+  abrirModal(existente ? 'Editar desafio' : 'Novo desafio', `<form id="f-desafio">
+    <label>Nome</label><input name="nome" value="${esc(d.nome || '')}" placeholder="Ex.: Verão 2027 💪" required maxlength="60">
+    <label>Regras / combinado <small>(opcional)</small></label><input name="descricao" value="${esc(d.descricao || '')}" placeholder="Ex.: mínimo 40 min; quem perder paga o jantar" maxlength="200">
+    <div class="linha"><div><label>Começa</label><input type="date" name="inicio" value="${ini}" required></div><div><label>Termina</label><input type="date" name="fim" value="${fim}" required></div></div>
+    <div class="chips" style="margin-top:10px">${[7, 14, 30, 60, 90].map((n) => `<button type="button" class="chip" data-dur="${n}">${n} dias</button>`).join('')}</div>
+    <label>Quem ganha</label><div class="seg">
+      <label><input type="radio" name="criterio" value="dias" ${d.criterio !== 'minutos' ? 'checked' : ''}>Mais dias treinados</label>
+      <label><input type="radio" name="criterio" value="minutos" ${d.criterio === 'minutos' ? 'checked' : ''}>Mais minutos</label></div>
+    ${dupla.length ? `<label>Participantes da dupla</label>${dupla.map((p) => `<label class="chk-l"><input type="checkbox" name="membro" value="${p}" ${existente ? '' : 'checked'}>${esc(P[p]?.perfil?.nome || 'Parceiro(a)')}</label>`).join('')}` : ''}
+    <p class="rodape" style="text-align:left;margin-top:12px">Outras pessoas entram com um código (botão Convidar dentro do desafio).</p>
+    <p class="erro" id="d-erro"></p>
+    <div class="acoes"><button class="btn lime">${existente ? 'Salvar' : 'Criar desafio'}</button></div>
+  </form>`, (el) => {
+    const f = el.querySelector('form');
+    el.addEventListener('click', (e) => { const b = e.target.closest('[data-dur]'); if (b) f.fim.value = C.somarDias(f.inicio.value || amanha, Number(b.dataset.dur) - 1); });
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!f.inicio.value || !f.fim.value || f.fim.value < f.inicio.value) { el.querySelector('#d-erro').textContent = 'O fim precisa ser depois do começo.'; return; }
+      const novos = [...f.querySelectorAll('[name=membro]:checked')].map((x) => x.value);
+      const perfis = Object.fromEntries(novos.map((p) => [p, { nome: P[p]?.perfil?.nome || 'Parceiro(a)', foto: P[p]?.perfil?.foto || '' }]));
+      const campos = { nome: f.nome.value.trim(), descricao: f.descricao.value.trim(), inicio: f.inicio.value, fim: f.fim.value, criterio: f.criterio.value };
+      if (existente) {
+        store.definir(['desafios', d.id], { ...campos, membros: [...new Set([...d.membros, ...novos])], perfis }, true);
+        toast('Desafio atualizado');
+      } else {
+        const id = store.novoId();
+        store.definir(['desafios', id], { ...campos, dono: uid, membros: [uid, ...novos], perfis: { [uid]: eu(), ...perfis }, criado: Date.now() }, false);
+        desafioSel = id; tela = 'desafio';
+        toast('🏆 Desafio criado!');
+      }
+      fecharModal();
+    });
+  });
+}
+
+async function modalConvidarDesafio(id) {
+  const d = D.desafios.find((x) => x.id === id);
+  if (!d) return;
+  abrirModal('Convidar para o desafio', '<div class="vazio">Gerando…</div>');
+  try {
+    const cod = await store.criarEntrada(id, d.nome);
+    const link = location.origin + location.pathname;
+    $('#modal-corpo').innerHTML = `<p class="hero-sub" style="text-align:center">Mande este código. A pessoa abre o app, vai em <b>Juntos → Desafios → Tenho um código</b> e digita.</p>
+      <div class="codigo">${cod}</div><p class="rodape" style="margin-top:0">Vale por ${ENTRADA_DIAS} dias e serve para mais de uma pessoa.</p>
+      <div class="acoes"><button class="btn lime" id="compartilhar">Compartilhar</button><button class="btn" id="copiar">Copiar</button></div>`;
+    const texto = `Bora pro desafio "${d.nome}" no Fôlego 🏆\nAbre ${link} → Juntos → Desafios → Tenho um código → ${cod}`;
+    $('#copiar').onclick = async () => { try { await navigator.clipboard.writeText(texto); toast('Copiado'); } catch (e) { toast(cod); } };
+    $('#compartilhar').onclick = async () => { if (navigator.share) navigator.share({ text: texto }).catch(() => {}); else $('#copiar').click(); };
+  } catch (e) {
+    $('#modal-corpo').innerHTML = `<p class="erro">Não foi possível gerar o código: ${esc(e.message)}</p>`;
+  }
+}
+
+function modalEntrarDesafio() {
+  abrirModal('Entrar num desafio', `<form><label>Código que você recebeu</label><input name="cod" class="codigo-in" maxlength="6" autocomplete="off" autocapitalize="characters" required><p id="cod-erro" class="erro"></p><div class="acoes"><button class="btn lime">Entrar</button></div></form>`, (el) => {
+    const f = el.querySelector('form');
+    setTimeout(() => f.cod.focus(), 200);
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        const r = await store.entrarDesafio(f.cod.value.trim().toUpperCase(), eu());
+        fecharModal(); toast(`🏆 Você entrou em "${r.nome}"!`); desafioSel = r.id; tela = 'desafio'; agendarRender();
+      } catch (err) {
+        el.querySelector('#cod-erro').textContent = err.code === 'permission-denied' ? 'Código inválido ou vencido.' : err.message;
+      }
+    });
+  });
+}
+
+function modalMenuDesafio(id) {
+  const d = D.desafios.find((x) => x.id === id);
+  if (!d) return;
+  const dono = d.dono === uid;
+  abrirModal(d.nome, `<div class="list g">
+    ${dono ? '<div class="row clic" data-op="editar"><div class="info"><div class="t">Editar desafio</div><div class="m">Nome, datas, regra e participantes da dupla</div></div><span class="seta">›</span></div>' : ''}
+    <div class="row clic perigo" data-op="sair"><div class="info"><div class="t">Sair do desafio</div><div class="m">Seus check-ins continuam no seu Hoje</div></div></div>
+    ${dono ? '<div class="row clic perigo" data-op="apagar"><div class="info"><div class="t">Apagar desafio</div><div class="m">Some para todo mundo</div></div></div>' : ''}
+  </div><div id="confirma"></div>`, (el) => {
+    el.addEventListener('click', async (e) => {
+      const r = e.target.closest('[data-op]'); if (!r) return;
+      const op = r.dataset.op;
+      if (op === 'editar') { fecharModal(); modalDesafio(d); return; }
+      if (op === 'sair' || op === 'apagar') {
+        el.querySelector('#confirma').innerHTML = `<p class="hero-sub" style="margin-top:14px">${op === 'sair' ? 'Sair deste desafio?' : 'Apagar o desafio para todos? Não dá para desfazer.'}</p><div class="acoes"><button class="btn danger" data-op="${op}-ok">${op === 'sair' ? 'Sair' : 'Apagar'}</button></div>`;
+        return;
+      }
+      if (op === 'sair-ok') await store.sairDesafio(id);
+      if (op === 'apagar-ok') await store.remover(['desafios', id]);
+      D.desafios = D.desafios.filter((x) => x.id !== id);
+      fecharModal(); tela = 'dupla'; toast(op === 'sair-ok' ? 'Você saiu do desafio' : 'Desafio apagado'); agendarRender();
+    });
+  });
+}
+
+function modalFotos(fotos, extra = '') {
+  abrirModal('Foto', fotos.map((src) => `<img class="foto-grande" src="${src}" alt="">`).join('<div style="height:10px"></div>') + extra);
+}
+
 // ---------- Dupla ----------
 function telaDupla() {
   const lista = (D.perfil?.parceiros || []).filter((x) => x !== uid);
-  let html = '<div class="hero fade-in" style="padding-bottom:14px"><div class="ola">Dupla</div><div class="hero-sub">A ofensiva da dupla só cresce quando todo mundo cumpre o dia. ❄️ Congelamentos seguram a sequência num dia ruim.</div></div>';
+  let html = '<p class="hero-sub" style="margin:16px 4px 14px">A ofensiva da dupla só cresce quando todo mundo cumpre o dia. ❄️ Congelamentos seguram a sequência num dia ruim.</p>';
   if (!lista.length) {
     html += `<div class="vazio g"><span class="big">🤝</span>Chame sua dupla para acompanhar o dia um do outro, reagir e manter a ofensiva juntos.
       <div class="acoes"><button class="btn lime" data-a="gerar-codigo">Gerar código</button><button class="btn" data-a="digitar-codigo">Tenho um código</button></div></div>`;
@@ -537,7 +936,10 @@ function cartaoParceiro(p) {
     } else {
       detalhe += '<div class="linha-st"><span class="s">😌</span><span class="x">Dia de descanso</span></div>';
     }
-    const ic = { ok: '✅', troca: '🔄', pulou: '❌' };
+    for (const c of o.checkins || []) {
+      detalhe += `<div class="linha-st"><span class="s">📸</span><span>${C.tipoInfo(c.tipo).e} ${esc(c.titulo || C.tipoInfo(c.tipo).nome)} <span class="x">· ${resumoCheckin(c)}</span></span></div>`;
+    }
+    const ic ={ ok: '✅', troca: '🔄', pulou: '❌' };
     for (const r of pv.refeicoes || []) {
       const s = (dia.refeicoes || {})[r.id];
       const nota = (dia.notas || {})[r.id];
@@ -545,7 +947,10 @@ function cartaoParceiro(p) {
     }
     if (dia.agua) detalhe += `<div class="linha-st"><span class="s">💧</span><span>${num(dia.agua / 1000)} L <span class="x">de ${num((pv.metaAgua || 2500) / 1000)} L</span></span></div>`;
     const fotos = (o.fotos || []).filter((f) => f.data === h);
-    if (fotos.length) detalhe += `<div class="fotos">${fotos.map((f) => `<img src="${f.img}" alt="" data-a="ver-foto-par" data-p="${p}" data-id="${f.id}">`).join('')}</div>`;
+    const fotosCk = (o.checkins || []).flatMap((c) => (c.fotos || []).map((src, i) => ({ c, i, src })));
+    if (fotos.length || fotosCk.length) {
+      detalhe += `<div class="fotos">${fotosCk.map((x) => `<img src="${x.src}" alt="" data-a="ver-ck-par" data-p="${p}" data-id="${x.c.id}" data-i="${x.i}">`).join('')}${fotos.map((f) => `<img src="${f.img}" alt="" data-a="ver-foto-par" data-p="${p}" data-id="${f.id}">`).join('')}</div>`;
+    }
   }
   const minha = dia?.reacoes?.[uid];
   const reacoes = ['🔥', '💪', '👏', '❤️', '🥗'].map((e) => `<button class="${minha === e ? 'on' : ''}" data-a="reagir" data-p="${p}" data-v="${e}" ${dia ? '' : 'disabled'}>${e}</button>`).join('');
@@ -674,7 +1079,7 @@ function telaPerfil() {
     <div class="row clic" data-a="meta-desc"><div class="info"><div class="t">Descanso padrão entre séries</div><div class="m">Quando o plano não diz</div></div><span class="val-d">${pr.descanso}s</span><span class="seta">›</span></div>
   </div></div>
   <div class="sec"><div class="sec-h"><h3>Ofensiva</h3></div><div class="list g">
-    <div class="row"><div class="info"><div class="t">Começou em</div></div><span class="val-d">${esc(C.paraData(inicio()).toLocaleDateString('pt-BR'))}</span></div>
+    <div class="row"><div class="info"><div class="t">${inicio() > C.hoje() ? 'Começa em' : 'Começou em'}</div></div><span class="val-d">${esc(C.paraData(inicio()).toLocaleDateString('pt-BR'))}</span></div>
     <div class="row"><div class="info"><div class="t">Recorde</div></div><span class="val-d">🔥 ${of.recorde}</span></div>
     <div class="row clic" data-a="ir" data-id="dupla"><div class="info"><div class="t">Dupla</div></div><span class="val-d">${nPar ? plural(nPar, 'pessoa', 'pessoas') : 'ninguém ainda'}</span><span class="seta">›</span></div>
   </div></div>
@@ -683,7 +1088,7 @@ function telaPerfil() {
     <div class="row clic" data-a="exportar"><div class="info"><div class="t">Exportar backup (JSON)</div></div><span class="seta">›</span></div>
     <div class="row clic perigo" data-a="sair"><div class="info"><div class="t">Sair${store.local ? ' (trocar conta de teste)' : ''}</div></div></div>
   </div></div>
-  <div class="rodape">Fôlego v${VERSAO}${modoLocal ? ' · modo local de teste' : ''}<br>Dados no Firebase, protegidos por conta. A dupla vê só o resumo do dia, refeições e fotos de refeição.</div>`;
+  <div class="rodape">Fôlego v${VERSAO}${modoLocal ? ' · modo local de teste' : ''}<br>Dados no Firebase, protegidos por conta. A dupla vê só o resumo do dia, refeições, check-ins e fotos. Nos desafios, os participantes veem os check-ins enviados para lá.</div>`;
 }
 
 // ---------------- Modal ----------------
@@ -731,14 +1136,14 @@ function modalPlano() {
       fecharModal(); toast('Plano salvo ✓');
     });
     el.querySelector('[data-a="exemplo-plano"]')?.addEventListener('click', () => { f.treino.value = C.EXEMPLO_TREINO; f.dieta.value = C.EXEMPLO_DIETA; previa(); });
-    import('./importar.js?v=0.2').then((I) => { f.arquivo.accept = I.ACEITA; }).catch(() => {});
+    import('./importar.js?v=0.3').then((I) => { f.arquivo.accept = I.ACEITA; }).catch(() => {});
     f.arquivo.addEventListener('change', async () => {
       const arq = f.arquivo.files[0]; f.arquivo.value = '';
       if (!arq) return;
       const box = el.querySelector('#importado');
       box.className = 'aviso'; box.textContent = `Lendo ${arq.name}…`;
       try {
-        const I = await import('./importar.js?v=0.2');
+        const I = await import('./importar.js?v=0.3');
         const linhas = await I.lerArquivo(arq);
         const r = I.montarPlano(linhas);
         if (r.treino) f.treino.value = r.treino;
@@ -921,6 +1326,47 @@ function aoClicar(e) {
       const t = C.treinoDoDia(D.plano, dataSel, dia);
       salvarDia(dataSel, { treinoFeito: true, treinoId: t?.id ?? null });
       toast('Treino feito 💪');
+      if (!D.checkins.some((c) => c.data === dataSel)) modalCheckin({ tipo: 'musculacao', titulo: t?.nome || '' });
+      break;
+    }
+    case 'checkin': modalCheckin(); break;
+    case 'ver-checkin': {
+      const c = D.checkins.find((x) => x.id === id);
+      if (!c) break;
+      if (editavel(c.data)) modalCheckin({}, c);
+      else modalFotos(c.fotos || [], `<div class="aviso">${C.tipoInfo(c.tipo).e} ${esc(c.titulo || C.tipoInfo(c.tipo).nome)} · ${resumoCheckin(c)}</div>`);
+      break;
+    }
+    case 'ver-checkin-d': {
+      store.lerDoc(['feed', uid, 'checkins', id]).then((c) => {
+        if (!c) { toast('Check-in não encontrado.'); return; }
+        if (editavel(c.data)) modalCheckin({}, c); else toast('Esse check-in já fechou. Dá para editar até anteontem.');
+      });
+      break;
+    }
+    case 'aba': aba = id; render(); break;
+    case 'abrir-desafio': desafioSel = id; tela = 'desafio'; window.scrollTo(0, 0); render(); break;
+    case 'novo-desafio': modalDesafio(); break;
+    case 'entrar-desafio': modalEntrarDesafio(); break;
+    case 'convidar-desafio': modalConvidarDesafio(id); break;
+    case 'menu-desafio': modalMenuDesafio(id); break;
+    case 'reagir-ck': {
+      const c = (DS[b.dataset.d]?.checkins || []).find((x) => x.id === id);
+      if (!c) break;
+      const v = c.reacoes?.[uid] === b.dataset.v ? null : b.dataset.v;
+      c.reacoes = { ...(c.reacoes || {}), [uid]: v };
+      store.definir(['desafios', b.dataset.d, 'checkins', id], { reacoes: { [uid]: v } }, true);
+      render();
+      break;
+    }
+    case 'ver-img-ck': {
+      const c = (DS[b.dataset.d]?.checkins || []).find((x) => x.id === id);
+      if (c) modalFotos(fotosDoCheckin(b.dataset.d, c));
+      break;
+    }
+    case 'ver-ck-par': {
+      const c = (P[b.dataset.p]?.checkins || []).find((x) => x.id === id);
+      if (c) modalFotos(c.fotos || [], `<div class="aviso">${C.tipoInfo(c.tipo).e} ${esc(c.titulo || C.tipoInfo(c.tipo).nome)} · ${resumoCheckin(c)}${c.nota ? `<br>“${esc(c.nota)}”` : ''}</div>`);
       break;
     }
     case 'treino-desfazer': salvarDia(dataSel, { treinoFeito: false }); break;
@@ -932,6 +1378,7 @@ function aoClicar(e) {
       const nomeEx = (x) => t?.exercicios.find((e2) => e2.id === x)?.nome || x;
       toast(recs.length ? `🏆 Recorde: ${recs.map((r) => `${nomeEx(r.exId)} ${num(r.kg)} kg`).join(', ')}` : 'Treino concluído 💪', 4000);
       tela = 'hoje'; window.scrollTo(0, 0); render();
+      if (!D.checkins.some((c) => c.data === dataSel)) modalCheckin({ tipo: 'musculacao', titulo: t?.nome || '' });
       break;
     }
     case 'serie': {

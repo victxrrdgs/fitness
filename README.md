@@ -11,6 +11,11 @@ Abra `index.html` por um servidor local (`python -m http.server` na pasta) e, pa
 - **Dia cumprido** = treino feito (quando há treino na agenda) e ≥ 80% das refeições (ajustável no Perfil)
 - **Ofensiva**: ❄️ congelamento (começa com 1, +1 toda segunda, máx. 2) segura a sequência num dia ruim
 - **Dupla** (até 5 pessoas): código de convite, ofensiva compartilhada, tira de 14 dias, dia do parceiro com fotos, reações e cutucar
+- **Desafios** (estilo GymRats, aba *Juntos*): nome, regras, início e fim; ganha quem treinar mais dias ou somar mais minutos. Placar, feed com fotos e reações. Gente da dupla entra direto; outras pessoas entram com código (vale 7 dias, até 20 pessoas)
+- **Check-in**: prova do treino com foto (até 2), atividade, duração, calorias, km, onde treinou e comentário. Conta como treino feito no dia e entra nos desafios ativos
+  - **Android / Samsung Health**: no resumo do treino, *Compartilhar → Fôlego* abre o check-in com a imagem (e tempo/calorias, se vierem no texto). Precisa do app instalado pelo Chrome
+  - **iPhone / Apple Saúde**: anexe o print do treino, ou use um atalho (app Atalhos) que abra `https://victxrrdgs.github.io/fitness/?acao=checkin&min=45&kcal=320&km=5.2&tipo=Corrida&fonte=apple`
+- **Ofensiva** conta a partir de 24/11/2026 (`INICIO_OFENSIVA` em `calc.js`); antes disso nada conta como falha
 - **Progresso**: calendário do mês, peso (privado), recordes e gráfico por exercício
 - **Plano**: cole o treino e a dieta em texto simples (formato em *Plano → Editar → Como escrever*) ou **importe de um arquivo** (PDF, Word .docx, Excel .xlsx, CSV ou texto). O app preenche os campos e você confere antes de salvar.
 - Funciona offline e pode ser instalado no celular

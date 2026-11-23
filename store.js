@@ -7,12 +7,18 @@
 //   perfis/{uid}                            nome, ofensiva e parceiros (a dupla lê)
 //   feed/{uid}/dias/{data}                  registro do dia (a dupla lê e reage)
 //   feed/{uid}/fotos/{id}                   fotos das refeições (a dupla lê)
+//   feed/{uid}/checkins/{id}                check-ins com foto, tempo e local (a dupla lê)
 //   convites/{codigo}                       código de dupla, validade curta
+//   desafios/{id}                           desafio (estilo GymRats): membros, datas, critério
+//   desafios/{id}/checkins/{id}             cópia do check-in sem foto (placar e feed)
+//   desafios/{id}/fotos/{id}                fotos do check-in (carregadas só quando aparecem)
+//   entradas/{codigo}                       código para entrar num desafio (7 dias)
 import { firebaseConfig } from './firebase-config.js';
 
 const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 export const modoLocal = !firebaseConfig || !firebaseConfig.apiKey || new URLSearchParams(location.search).has('local');
 export const CONVITE_MIN = 30;
+export const ENTRADA_DIAS = 7;
 
 const novoCodigo = () => {
   const L = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -49,7 +55,9 @@ function criarStoreLocal() {
     if (r === undefined) delete d[c][id]; else d[c][id] = r;
     gravar(d);
   };
-  const filtrar = (lista, onde) => (onde ? lista.filter((x) => x[onde[0]] === onde[2]) : lista);
+  const filtrar = (lista, onde) => (!onde ? lista
+    : onde[1] === 'array-contains' ? lista.filter((x) => (x[onde[0]] || []).includes(onde[2]))
+      : lista.filter((x) => x[onde[0]] === onde[2]));
 
   return {
     local: true,
@@ -82,6 +90,7 @@ function criarStoreLocal() {
       ouvintes.add(emitir); emitir();
       return () => ouvintes.delete(emitir);
     },
+    async lerDoc(p) { const v = (ler()[colKey(p.slice(0, -1))] || {})[p.at(-1)]; return v ? { id: p.at(-1), ...v } : null; },
     assinarStatus(cb) { cb('Modo local de teste'); },
     async definir(p, dados, merge = true) { docOp(p, (atual) => (merge ? mesclar(atual, dados) : dados)); },
     async substituirCampos(p, dados) { docOp(p, (atual) => ({ ...(atual || {}), ...dados })); },
@@ -102,6 +111,23 @@ function criarStoreLocal() {
     },
     async desfazerDupla(outro) {
       docOp(['perfis', usuario.uid], (p) => ({ ...(p || {}), parceiros: (p?.parceiros || []).filter((x) => x !== outro) }));
+    },
+    async criarEntrada(desafio, nome) {
+      const cod = novoCodigo();
+      await this.definir(['entradas', cod], { uid: usuario.uid, nome, desafio, expira: Date.now() + ENTRADA_DIAS * 86400000 }, false);
+      return cod;
+    },
+    async entrarDesafio(cod, eu) {
+      const c = (ler().entradas || {})[cod];
+      if (!c || c.expira < Date.now()) throw new Error('Código inválido ou vencido.');
+      const d = (ler().desafios || {})[c.desafio];
+      if (!d) throw new Error('Esse desafio não existe mais.');
+      if ((d.membros || []).includes(usuario.uid)) return { id: c.desafio, ...d };
+      docOp(['desafios', c.desafio], (x) => ({ ...x, membros: [...x.membros, usuario.uid], perfis: { ...(x.perfis || {}), [usuario.uid]: eu }, entrada: cod }));
+      return { id: c.desafio, ...d };
+    },
+    async sairDesafio(id) {
+      docOp(['desafios', id], (x) => (x ? { ...x, membros: x.membros.filter((u) => u !== usuario.uid) } : x));
     },
     async exportarTudo() { return ler(); },
   };
@@ -156,6 +182,7 @@ async function criarStoreFirebase() {
     assinarDoc(p, cb) {
       return fs.onSnapshot(ref(p), (s) => cb(s.exists() ? { id: s.id, ...s.data() } : null), (e) => console.error(p.join('/'), e));
     },
+    async lerDoc(p) { const s = await fs.getDoc(ref(p)); return s.exists() ? { id: s.id, ...s.data() } : null; },
     assinarStatus(cb) {
       const at = () => cb(navigator.onLine ? 'Sincronizado' : 'Offline');
       window.addEventListener('online', at); window.addEventListener('offline', at); at();
@@ -183,10 +210,29 @@ async function criarStoreFirebase() {
       return c;
     },
     async desfazerDupla(outro) { await fs.updateDoc(ref(['perfis', uid]), { parceiros: fs.arrayRemove(outro) }); },
+    async criarEntrada(desafio, nome) {
+      const cod = novoCodigo();
+      await fs.setDoc(ref(['entradas', cod]), { uid, nome, desafio, expira: Date.now() + ENTRADA_DIAS * 86400000 });
+      return cod;
+    },
+    // Quem tem o código se coloca na lista de membros (as regras conferem o código).
+    async entrarDesafio(cod, eu) {
+      const s = await fs.getDoc(ref(['entradas', cod]));
+      const c = s.exists() ? s.data() : null;
+      if (!c || c.expira < Date.now()) throw new Error('Código inválido ou vencido.');
+      try {
+        await fs.updateDoc(ref(['desafios', c.desafio]), { membros: fs.arrayUnion(uid), [`perfis.${uid}`]: eu, entrada: cod });
+      } catch (e) {
+        // Já é membro (a regra recusa porque nada mudou na lista)
+        if (!(await this.lerDoc(['desafios', c.desafio]).catch(() => null))) throw e;
+      }
+      return { id: c.desafio, nome: c.nome };
+    },
+    async sairDesafio(id) { await fs.updateDoc(ref(['desafios', id]), { membros: fs.arrayRemove(uid) }); },
     async exportarTudo() {
       const out = {};
       for (const c of ['config', 'pesos']) out[c] = mapear(await fs.getDocs(col(['usuarios', uid, c])));
-      for (const c of ['dias', 'fotos']) out[c] = mapear(await fs.getDocs(col(['feed', uid, c])));
+      for (const c of ['dias', 'fotos', 'checkins']) out[c] = mapear(await fs.getDocs(col(['feed', uid, c])));
       const p = await fs.getDoc(ref(['perfis', uid]));
       out.perfil = p.exists() ? p.data() : null;
       return out;
