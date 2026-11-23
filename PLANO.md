@@ -14,11 +14,13 @@ Projeto separado do `financas`, mas com a mesma base: HTML/JS puro, GitHub Pages
 
 ## Fases
 - [x] 0. Base: regras (`calc.js`), dados (`store.js`, modo local com 2 contas de teste), regras do Firestore, estilos, `index.html`
-- [ ] 0. `app.js` (interface), `sw.js`, `manifest.webmanifest`, ícones, `firebase-config.js`
-- [ ] 1. Hoje: treino do dia com séries/carga/última vez + cronômetro; refeições ✅🔄❌ + foto; água; ofensiva
-- [ ] 1. Plano: importar treino e dieta por texto (formato em `calc.js`: `lerTreino`, `lerDieta`)
-- [ ] 2. Dupla: código de convite, ofensiva compartilhada, feed do dia do parceiro, reações, cutucar
-- [ ] 3. Progresso: calendário, peso, recordes e gráfico por exercício
+- [x] 0. `app.js` (interface), `sw.js`, `manifest.webmanifest`, ícones, `firebase-config.js` (vazio = modo local)
+- [x] 1. Hoje: treino do dia com séries/carga/última vez + cronômetro; refeições ✅🔄❌ + foto; água; ofensiva
+- [x] 1. Plano: importar treino e dieta por texto (formato em `calc.js`: `lerTreino`, `lerDieta`)
+- [x] 2. Dupla: código de convite, ofensiva compartilhada, feed do dia do parceiro, reações, cutucar
+- [x] 3. Progresso: calendário, peso, recordes e gráfico por exercício
+- [ ] Publicar: Firebase + GitHub Pages (passos abaixo) e testar com as duas contas reais
+- [ ] Colar o plano real dela (e o dele) no app
 - [ ] 4. Lembretes (bot do Telegram e/ou notificação)
 - [ ] 5. Opcionais: calorias (TACO + Open Food Facts), foto com IA, APK
 
@@ -26,3 +28,7 @@ Projeto separado do `financas`, mas com a mesma base: HTML/JS puro, GitHub Pages
 1. Firebase: novo projeto → Authentication (Google) → Firestore → colar `firestore.rules` → Domínios autorizados: `victxrrdgs.github.io`.
 2. Colar a configuração web em `firebase-config.js`.
 3. GitHub Pages: Settings → Pages → branch `main`, pasta `/`.
+
+## Testado
+Fluxo completo no modo local (Chromium, tela de celular, duas abas): plano de exemplo → refeições → treino com cargas → dia cumprido → código de dupla → reação e cutucada. Sem erros no console.
+Ainda não testado com o Firebase de verdade (falta criar o projeto).

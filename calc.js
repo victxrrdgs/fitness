@@ -156,6 +156,10 @@ export const previstoNaAgenda = (plano, data) => !!(plano?.treinos || []).find((
 
 // Progresso do dia, de 0 a 1, e se o dia está cumprido.
 export function avaliarDia(plano, data, dia, prefs = {}) {
+  // Sem plano não há o que cumprir: o dia não conta.
+  if (!plano || (!(plano.treinos || []).length && !(plano.refeicoes || []).length)) {
+    return { cumprido: false, treinoOk: false, refeicoesOk: false, temTreino: false, feitas: 0, marcadas: 0, total: 0, progresso: 0 };
+  }
   const pct = (prefs.metaRefeicoes ?? 80) / 100;
   const refs = plano?.refeicoes || [];
   const st = dia?.refeicoes || {};

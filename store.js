@@ -84,6 +84,7 @@ function criarStoreLocal() {
     },
     assinarStatus(cb) { cb('Modo local de teste'); },
     async definir(p, dados, merge = true) { docOp(p, (atual) => (merge ? mesclar(atual, dados) : dados)); },
+    async substituirCampos(p, dados) { docOp(p, (atual) => ({ ...(atual || {}), ...dados })); },
     async remover(p) { docOp(p, () => undefined); },
     async criarConvite(nome) {
       const cod = novoCodigo();
@@ -161,6 +162,8 @@ async function criarStoreFirebase() {
     },
     // Gravações não são aguardadas: funcionam offline e sincronizam depois.
     async definir(p, dados, merge = true) { fs.setDoc(ref(p), dados, { merge }); },
+    // Grava só estes campos, substituindo cada um por inteiro.
+    async substituirCampos(p, dados) { fs.setDoc(ref(p), dados, { mergeFields: Object.keys(dados) }); },
     async remover(p) { fs.deleteDoc(ref(p)); },
     async criarConvite(nome) {
       const cod = novoCodigo();

@@ -501,3 +501,9 @@ form textarea:focus { border-color: rgba(198, 244, 50, .6); }
 .ajuda-fmt code { background: rgba(255, 255, 255, .08); padding: 1px 6px; border-radius: 6px; font-size: .78rem; color: var(--text); }
 .foto-grande { width: 100%; border-radius: 20px; display: block; }
 .local-contas { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.ano-nav { display: flex; align-items: center; justify-content: space-between; margin: 6px 0 14px; }
+.ano-nav b { font-size: 1.2rem; text-transform: capitalize; }
+.ano-nav .ico { width: 38px; height: 38px; font-size: 1.2rem; }
+.ano-nav .ico:disabled { opacity: .3; }
+.ring-dia .c { line-height: 1.1; }
+.ring-dia .c small { margin-top: 2px; }
