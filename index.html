@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07080c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Fôlego">
+  <title>Fôlego</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png?v=1">
+  <link rel="apple-touch-icon" href="icons/icon-180.png?v=1">
+  <link rel="stylesheet" href="styles.css?v=0.1">
+</head>
+<body>
+  <div class="bg-art" aria-hidden="true">
+    <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div>
+  </div>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="grad-ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#c6f432"/><stop offset="1" stop-color="#22c55e"/></linearGradient>
+      <linearGradient id="grad-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c6f432" stop-opacity=".28"/><stop offset="1" stop-color="#c6f432" stop-opacity="0"/></linearGradient>
+    </defs>
+  </svg>
+
+  <!-- Login -->
+  <section id="login" class="hidden">
+    <div class="login-card g">
+      <img class="logo" src="icons/icon-192.png?v=1" alt="">
+      <h1>Fôlego</h1>
+      <p>Treino e dieta do dia, a ofensiva 🔥<br>e o progresso de vocês dois.</p>
+      <button id="btn-login" class="btn primary big">Entrar com Google</button>
+      <div id="login-local" class="local-contas hidden"></div>
+      <p id="login-erro" class="erro"></p>
+    </div>
+  </section>
+
+  <!-- App -->
+  <section id="app" class="hidden">
+    <header class="top">
+      <button id="avatar" class="avatar" data-a="ir" data-id="perfil" aria-label="Perfil"></button>
+      <div class="mes-pill g" id="dia-pill">
+        <button id="dia-ant" aria-label="Dia anterior">‹</button>
+        <span id="dia-label"></span>
+        <button id="dia-prox" aria-label="Próximo dia">›</button>
+      </div>
+      <button id="fogo" class="fogo g" data-a="ir" data-id="progresso" aria-label="Ofensiva"><span class="f">🔥</span><span id="fogo-n">0</span></button>
+    </header>
+
+    <main id="conteudo"></main>
+
+    <nav class="dock g">
+      <button data-tela="hoje" class="active">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Hoje</span>
+      </button>
+      <button data-tela="dupla">
+        <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><circle cx="17" cy="9.5" r="2.8"/><path d="M2.5 20c.9-3.6 3.5-5.5 6.5-5.5s5.6 1.9 6.5 5.5M15.5 14.6c2.6-.2 4.9 1.4 5.8 4.4"/></svg><span>Dupla</span>
+      </button>
+      <button data-tela="progresso">
+        <svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg><span>Progresso</span>
+      </button>
+      <button data-tela="plano">
+        <svg viewBox="0 0 24 24"><path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11"/></svg><span>Plano</span>
+      </button>
+      <button data-tela="perfil">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg><span>Perfil</span>
+      </button>
+    </nav>
+  </section>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="sheet g">
+      <div class="grabber"></div>
+      <div class="sheet-head">
+        <h2 id="modal-titulo"></h2>
+        <button class="ico g" id="modal-fechar" aria-label="Fechar">✕</button>
+      </div>
+      <div id="modal-corpo"></div>
+    </div>
+  </div>
+
+  <div id="timer" class="timer g hidden"></div>
+  <div id="toast" class="toast g hidden"></div>
+  <input type="file" id="foto-in" accept="image/*" capture="environment" class="hidden">
+
+  <!-- Ao publicar uma versão nova, aumente o ?v= aqui, nos imports do app.js e no sw.js. -->
+  <script type="module" src="app.js?v=0.1"></script>
+</body>
+</html>

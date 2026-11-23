@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function logado() { return request.auth != null; }
+    function eu(uid) { return logado() && request.auth.uid == uid; }
+    // Quem o dono colocou na lista de parceiros pode ver o perfil e o feed dele.
+    function parceiroDe(uid) {
+      return logado() && request.auth.uid in get(/databases/$(database)/documents/perfis/$(uid)).data.get('parceiros', []);
+    }
+    function mudou() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // Privado: configurações, plano, peso.
+    match /usuarios/{uid}/{colecao}/{docId} {
+      allow read, write: if eu(uid) && colecao in ['config', 'pesos'];
+    }
+
+    match /perfis/{uid} {
+      allow read: if eu(uid) || parceiroDe(uid);
+      allow create, delete: if eu(uid);
+      // O dono muda tudo. A dupla só pode mandar uma cutucada.
+      allow update: if eu(uid) || (parceiroDe(uid) && mudou().hasOnly(['cutucada']));
+      // Quem tem um código válido gerado pelo dono entra na lista de parceiros (só se acrescenta).
+      allow update: if logado()
+        && mudou().hasOnly(['parceiros', 'convite'])
+        && request.resource.data.convite is string
+        && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.uid == uid
+        && get(/databases/$(database)/documents/convites/$(request.resource.data.convite)).data.expira > request.time.toMillis()
+        && request.resource.data.parceiros.toSet().difference(resource.data.get('parceiros', []).toSet()) == [request.auth.uid].toSet()
+        && resource.data.get('parceiros', []).toSet().difference(request.resource.data.parceiros.toSet()).size() == 0
+        && request.resource.data.parceiros.size() <= 5;
+    }
+
+    // Registro do dia e fotos das refeições: o dono grava, a dupla lê e reage.
+    match /feed/{uid}/{colecao}/{docId} {
+      allow read: if (eu(uid) || parceiroDe(uid)) && colecao in ['dias', 'fotos'];
+      allow write: if eu(uid) && colecao in ['dias', 'fotos'];
+      allow update: if colecao == 'dias' && parceiroDe(uid) && mudou().hasOnly(['reacoes']);
+    }
+
+    // Código de dupla: cada um só cria para si, com validade curta. Ninguém lista;
+    // quem sabe o código lê e apaga.
+    match /convites/{cod} {
+      allow get, delete: if logado();
+      allow create: if logado()
+        && request.resource.data.keys().hasOnly(['uid', 'nome', 'expira'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.expira is int
+        && request.resource.data.expira <= request.time.toMillis() + 1800000 + 60000;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
