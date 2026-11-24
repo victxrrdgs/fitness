@@ -29,6 +29,21 @@ Projeto separado do `financas`, mas com a mesma base: HTML/JS puro, GitHub Pages
 2. Colar a configuração web em `firebase-config.js`.
 3. GitHub Pages: Settings → Pages → branch `main`, pasta `/`.
 
-## Testado
-Fluxo completo no modo local (Chromium, tela de celular, duas abas): plano de exemplo → refeições → treino com cargas → dia cumprido → código de dupla → reação e cutucada. Sem erros no console.
-Ainda não testado com o Firebase de verdade (falta criar o projeto).
+## Testes
+- `node --test testes/*.test.mjs` — leitura do plano (formato do app e markdown), dia cumprido, ofensiva e congelamento.
+- Regras do Firestore: 42 casos no emulador oficial do Firebase (privacidade, convite, dupla, reações, cutucada, fotos, desfazer dupla). O script de teste não está no repositório; dá para refazer com `@firebase/rules-unit-testing`.
+- Navegador (modo local, tela de celular, duas abas): plano de exemplo e em markdown, refeições, foto, treino com cargas, recordes, peso, dias passados/futuros, código de dupla, reação, cutucada, desfazer dupla e dados maliciosos da dupla (nada executa). Sem erros no console.
+- Ainda não testado com o Firebase de verdade (falta criar o projeto).
+
+## Revisão v0.2 (bugs corrigidos)
+- Plano em markdown (títulos, negrito, listas numeradas, "4 séries de 10", "Segunda-feira: Pernas", "Opção 2: …") era lido errado.
+- Offline num aparelho novo, o perfil podia ser recriado, apagando a dupla e o início da ofensiva.
+- Dados vindos da dupla agora são tratados como não confiáveis (números, estados e fotos validados) e as regras só aceitam foto como imagem.
+- Desfazer a dupla agora corta o acesso dos dois lados.
+- A ofensiva começa no dia em que o primeiro plano é salvo (antes contava dias sem plano como falha).
+- Dias antes do início não são editáveis nem aparecem como "faltou".
+- App aberto de um dia para o outro volta para o dia de hoje.
+- Primeira dupla não mostrava aviso; resumo de "hoje" da dupla mostrava o dia anterior se ela não tinha aberto o app.
+- Foto da refeição: agora dá para escolher da galeria (antes abria só a câmera).
+- Cronômetro de descanso não dispara em exercício por tempo; séries sem carga aparecem como "10 reps".
+- Erros ao salvar no Firebase agora aparecem na tela.

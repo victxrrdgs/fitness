@@ -28,44 +28,87 @@ export function rotuloDia(s) {
 const semAcento = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
 export const slug = (s) => semAcento(String(s).toLowerCase()).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'item';
 
+const DIA_RE = /\b(domingo|segunda|terca|quarta|quinta|sexta|sabado|dom|seg|ter|qua|qui|sex|sab)(?:-feira)?\b/g;
+const DIA_IDX = { dom: 0, seg: 1, ter: 2, qua: 3, qui: 4, sex: 5, sab: 6 };
 function lerDias(txt) {
-  const out = new Set();
   const t = semAcento(String(txt || '').toLowerCase());
-  if (/todo|todos|diario/.test(t)) return [0, 1, 2, 3, 4, 5, 6];
-  for (const m of t.matchAll(/(dom|seg|ter|qua|qui|sex|sab)[a-z-]*/g)) out.add(SEMANA.indexOf(m[1]));
+  if (/\b(todos os dias|todo dia|diariamente|diario)\b/.test(t)) return [0, 1, 2, 3, 4, 5, 6];
+  const out = new Set();
+  for (const m of t.matchAll(DIA_RE)) out.add(DIA_IDX[m[1].slice(0, 3)]);
+  // "seg a sex", "segunda a sexta"
+  const faixa = t.match(/\b(dom|seg|ter|qua|qui|sex|sab)[a-z-]*\s+(?:a|ate)\s+(dom|seg|ter|qua|qui|sex|sab)/);
+  if (faixa) for (let d = DIA_IDX[faixa[1]]; ; d = (d + 1) % 7) { out.add(d); if (d === DIA_IDX[faixa[2]]) break; }
   return [...out].sort();
 }
 
-// Formato do treino (uma linha por exercício):
-//   TREINO A: Superiores | seg, qui
-//   Supino reto 4x8-10 90s (desce devagar)
-//   Esteira 20 min
+// Tira marcas de markdown e de lista. Diz se a linha parecia título ou item de lista.
+function limparLinha(bruta) {
+  let s = String(bruta).trim();
+  const titulo = /^#{1,6}\s/.test(s) || /^(\*\*|__)[^*_]+(\*\*|__):?$/.test(s);
+  s = s.replace(/^#{1,6}\s*/, '');
+  const lista = /^([-•*+–]|\d{1,2}[.)])\s+/.test(s);
+  s = s.replace(/^([-•*+–]|\d{1,2}[.)])\s+/, '').replace(/\*\*|__|`/g, '').replace(/^[\s*_]+|[\s*_]+$/g, '').trim();
+  return { s, titulo, lista };
+}
+const SERIES_RE = /(\d+)\s*(?:[x×]|s[ée]ries?\s*(?:de|x)?)\s*(\d+(?:\s*(?:-|–|a|\/)\s*\d+)?(?:\s*(?:reps?|repeti[cç][oõ]es|s\b|seg\b))?|falha|max)/i;
+const DIA_INICIO_RE = /^(domingo|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado)(-feira)?\b/i;
+
+// Formato do treino (aceita também o markdown que o Claude costuma gerar):
+//   TREINO A: Superiores | seg, qui        ## Treino A – Peito (segunda e quinta)
+//   Supino reto 4x8-10 90s (obs)           1. Supino reto – 4 séries de 8-10 repetições
+//   Esteira 20 min                         Segunda-feira: Pernas
 export function lerTreino(texto) {
   const treinos = [];
   const agenda = {};
   let atual = null;
+  const novoTreino = (nome, id, dias) => {
+    while (treinos.some((t) => t.id === id)) id += '-2';
+    atual = { id, nome, exercicios: [] };
+    treinos.push(atual);
+    for (const d of dias) agenda[d] = id;
+  };
   for (const bruta of String(texto || '').split(/\r?\n/)) {
-    const linha = bruta.replace(/^[\s•*\-–]+/, '').trim();
+    const { s: linha, titulo, lista } = limparLinha(bruta);
     if (!linha) continue;
-    const cab = linha.match(/^treino\s+(.+?)(?:\s*[|@]\s*(.+))?$/i);
-    if (cab) {
-      let nome = cab[1].replace(/[:\s]+$/, '').trim();
-      let dias = cab[2];
-      // "TREINO A: Superiores (seg e qui)" também vale
-      const par = !dias && nome.match(/^(.*?)\s*\(([^)]*)\)\s*$/);
-      if (par && lerDias(par[2]).length) { nome = par[1]; dias = par[2]; }
-      let id = slug(nome.split(/[:\-–]/)[0]);
-      while (treinos.some((t) => t.id === id)) id += '-2';
-      atual = { id, nome: nome.replace(/\s*:\s*/, ' · '), exercicios: [] };
-      treinos.push(atual);
-      for (const d of lerDias(dias)) agenda[d] = id;
+    const temSeries = SERIES_RE.test(linha);
+    const comTreino = linha.match(/^treino\s+(.+)$/i);
+    const comDia = !lista && !temSeries && linha.match(DIA_INICIO_RE);
+    const ehCab = comTreino || comDia || (titulo && !temSeries) || (!lista && !temSeries && /:$/.test(linha));
+    if (!ehCab) {
+      if (/^descanso\b/i.test(linha)) { atual = null; continue; }
+      if (!atual) novoTreino('Treino', 'treino', []);
+      atual.exercicios.push(lerExercicio(linha, atual.exercicios));
       continue;
     }
-    if (/^descanso\b/i.test(linha)) { atual = null; continue; }
-    if (!atual) { atual = { id: 'treino', nome: 'Treino', exercicios: [] }; treinos.push(atual); }
-    atual.exercicios.push(lerExercicio(linha, atual.exercicios));
+    // Dias: depois de "|" ou "@", entre parênteses, ou na própria linha.
+    let resto = linha;
+    let diasTxt = '';
+    const sep = resto.match(/\s*[|@]\s*(.+)$/);
+    if (sep) { diasTxt = sep[1]; resto = resto.slice(0, sep.index); }
+    const par = resto.match(/\(([^)]*)\)/);
+    if (!diasTxt && par && lerDias(par[1]).length) { diasTxt = par[1]; resto = resto.replace(par[0], ''); }
+    if (!diasTxt) diasTxt = resto;
+    const dias = lerDias(diasTxt);
+    resto = resto.replace(/[:\s–—-]+$/, '').trim();
+    if (/\bdescanso\b|\bfolga\b|\boff\b/i.test(resto) && !comTreino) { atual = null; continue; }
+    let nome, id;
+    if (comTreino) {
+      const corpo = resto.replace(/^treino\s+/i, '');
+      const m = corpo.match(/^([^\s:–—-]+)\s*[:–—-]?\s*(.*)$/);
+      id = slug(m ? m[1] : corpo);
+      nome = m && m[2] ? `${m[1]} · ${m[2].replace(/\s*[:–—-]\s*/, ' · ')}` : corpo;
+    } else if (comDia) {
+      const diaNome = comDia[0];
+      const tema = resto.slice(comDia[0].length).replace(/^[\s:–—-]+/, '');
+      id = slug(tema || diaNome);
+      nome = tema ? `${diaNome[0].toUpperCase()}${diaNome.slice(1).toLowerCase()} · ${tema}` : diaNome;
+    } else {
+      nome = resto.replace(/\s*[:–—]\s*/, ' · ');
+      id = slug(resto.split(/[:–—-]/)[0]);
+    }
+    novoTreino(nome, id, dias);
   }
-  return { treinos, agenda };
+  return { treinos: treinos.filter((t) => t.exercicios.length), agenda: Object.fromEntries(Object.entries(agenda).filter(([, id]) => treinos.some((t) => t.id === id && t.exercicios.length))) };
 }
 
 function lerExercicio(linha, existentes) {
@@ -74,48 +117,63 @@ function lerExercicio(linha, existentes) {
   const parObs = resto.match(/\(([^)]*)\)\s*$/);
   if (parObs) { obs = parObs[1].trim(); resto = resto.slice(0, parObs.index).trim(); }
   let descanso = null;
-  const desc = resto.match(/(?:^|\s)(?:desc(?:anso)?\.?\s*)?(\d+)\s*(s|seg|segundos|"|min|minutos|')(?=\s|$|,)/i);
+  const DESC_RE = /(?:^|\s|,)(?:desc(?:anso)?\.?:?\s*(?:de\s*)?)?(\d+)\s*(s|seg|segundos|"|min|minutos|')(?=\s|$|,|\))/i;
+  // Descanso também pode estar na observação: "(descanso 90s)"
+  const descObs = obs.match(/desc(?:anso)?\.?:?\s*(?:de\s*)?(\d+)\s*(s|seg|segundos|"|min|minutos|')/i);
+  if (descObs) { descanso = /min|'/i.test(descObs[2]) ? Number(descObs[1]) * 60 : Number(descObs[1]); obs = obs.replace(descObs[0], '').replace(/^[\s,;–-]+|[\s,;–-]+$/g, ''); }
   let series = null, reps = '';
-  const sr = resto.match(/(\d+)\s*[x×]\s*(\d+(?:\s*(?:-|–|a|\/)\s*\d+)?(?:\s*(?:reps?|s\b|seg\b))?|falha|max)/i);
+  const sr = resto.match(SERIES_RE);
   if (sr) {
     series = Number(sr[1]);
-    reps = sr[2].replace(/\s*reps?$/i, '').replace(/\s*seg$/i, 's').replace(/\s*(–|a)\s*/, '-').replace(/\s+/g, '');
+    reps = sr[2].replace(/\s*(reps?|repeti[cç][oõ]es)$/i, '').replace(/\s*seg$/i, 's').replace(/\s*(–|a)\s*/, '-').replace(/\s+/g, '');
   }
+  const desc = resto.match(DESC_RE);
   if (desc && (!sr || desc.index > sr.index)) {
     const n = Number(desc[1]);
-    descanso = /min|'/i.test(desc[2]) ? n * 60 : n;
+    const ehMin = /min|'/i.test(desc[2]);
     // "Esteira 20 min" sem séries é a duração, não o descanso
-    if (!sr) { reps = `${n} ${/min|'/i.test(desc[2]) ? 'min' : 's'}`; descanso = null; }
+    if (!sr) reps = `${n} ${ehMin ? 'min' : 's'}`;
+    else if (descanso == null) descanso = ehMin ? n * 60 : n;
   }
   const corte = Math.min(...[sr?.index, desc?.index].filter((x) => x != null), resto.length);
-  const nome = resto.slice(0, corte).replace(/[:,\-–\s]+$/, '').trim() || linha;
+  const nome = resto.slice(0, corte).replace(/[:,\s–—-]+$/, '').trim() || linha;
   let id = slug(nome);
   while (existentes.some((e) => e.id === id)) id += '-2';
   return { id, nome, series: series || (reps ? 1 : 3), reps, descanso, obs };
 }
 
-// Formato da dieta (uma linha por refeição; linhas com "-" viram itens da refeição anterior):
-//   07:30 Café da manhã: 2 ovos mexidos, 1 pão integral
-//   - 1 fruta
+const REFEICAO_RE = /^(caf[eé]|desjejum|almo[cç]o|jantar|janta|lanche|ceia|cola[cç][aã]o|pr[eé][\s-]?treino|p[oó]s[\s-]?treino|refei[cç][aã]o|merenda|brunch)/i;
+const ALTERNATIVA_RE = /^(op[cç][aã]o|ou\b|alternativa|substitui|varia[cç][aã]o)/i;
+const HORA_RE = /\(?\b(\d{1,2})\s*(?:h|:)\s*(\d{2})?\b\)?(?:\s*(?:às|as|-|–))?/i;
+
+// Formato da dieta (aceita também markdown):
+//   07:30 Café da manhã: 2 ovos; 1 pão      ## Café da manhã (7h)
+//   - 1 fruta                               - 2 ovos mexidos
 export function lerDieta(texto) {
   const refeicoes = [];
+  const nova = (nomeBruto, itens) => {
+    const h = nomeBruto.match(HORA_RE);
+    const hora = h ? `${p2(h[1])}:${h[2] || '00'}` : '';
+    let nome = (h ? nomeBruto.replace(h[0], ' ') : nomeBruto).replace(/\(\s*\)/g, '').replace(/^[\s:–—-]+|[\s:–—-]+$/g, '').replace(/\s{2,}/g, ' ').trim() || 'Refeição';
+    let id = slug(nome);
+    while (refeicoes.some((r) => r.id === id)) id += '-2';
+    refeicoes.push({ id, nome, hora, itens });
+  };
   for (const bruta of String(texto || '').split(/\r?\n/)) {
-    const raw = bruta.trim();
-    if (!raw) continue;
-    const item = raw.match(/^[•*\-–]\s*(.+)$/);
-    if (item && refeicoes.length) { refeicoes.at(-1).itens.push(item[1].trim()); continue; }
-    const m = raw.replace(/^[•*\-–]\s*/, '').match(/^(?:(\d{1,2})\s*(?:[:h]\s*(\d{2})?)\s*[-–]?\s*)?([^:]+?)\s*:\s*(.*)$/i);
-    if (m) {
-      const hora = m[1] != null ? `${p2(m[1])}:${m[2] || '00'}` : '';
-      const nome = m[3].trim();
-      let id = slug(nome);
-      while (refeicoes.some((r) => r.id === id)) id += '-2';
-      refeicoes.push({ id, nome, hora, itens: m[4] ? m[4].split(/\s*[;]\s*/).filter(Boolean) : [] });
-    } else if (refeicoes.length) {
-      refeicoes.at(-1).itens.push(raw);
-    } else {
-      refeicoes.push({ id: slug(raw), nome: raw, hora: '', itens: [] });
+    const { s: linha, titulo, lista } = limparLinha(bruta);
+    if (!linha) continue;
+    const ult = refeicoes.at(-1);
+    const dp = linha.match(/^((?:\d{1,2}\s*[:h]\s*\d{2}\s*[-–]?\s*)?[^:]{1,48}?)\s*:\s*(.*)$/);
+    const cabeca = dp ? dp[1] : linha;
+    const semHora = cabeca.replace(HORA_RE, '').trim();
+    const pareceRefeicao = REFEICAO_RE.test(semHora) || /^\d{1,2}\s*(h|:)/.test(cabeca);
+    if (ult && (lista || ALTERNATIVA_RE.test(linha)) && !(titulo && pareceRefeicao)) { ult.itens.push(linha); continue; }
+    if (titulo || pareceRefeicao || (!ult) || (dp && !dp[2])) {
+      const itens = dp && dp[2] ? dp[2].split(/\s*;\s*/).filter(Boolean) : [];
+      nova(dp ? dp[1] : linha, itens);
+      continue;
     }
+    ult.itens.push(linha);
   }
   return { refeicoes };
 }

@@ -77,7 +77,7 @@ function criarStoreLocal() {
       const emitir = () => {
         const v = (ler()[colKey(p.slice(0, -1))] || {})[p.at(-1)];
         const s = JSON.stringify(v ?? null);
-        if (s !== ultimo) { ultimo = s; cb(v ? { id: p.at(-1), ...v } : null); }
+        if (s !== ultimo) { ultimo = s; cb(v ? { id: p.at(-1), ...v } : null, { doServidor: true }); }
       };
       ouvintes.add(emitir); emitir();
       return () => ouvintes.delete(emitir);
@@ -102,6 +102,7 @@ function criarStoreLocal() {
     },
     async desfazerDupla(outro) {
       docOp(['perfis', usuario.uid], (p) => ({ ...(p || {}), parceiros: (p?.parceiros || []).filter((x) => x !== outro) }));
+      docOp(['perfis', outro], (p) => (p ? { ...p, parceiros: (p.parceiros || []).filter((x) => x !== usuario.uid) } : undefined));
     },
     async exportarTudo() { return ler(); },
   };
@@ -154,17 +155,20 @@ async function criarStoreFirebase() {
       return fs.onSnapshot(q, (s) => cb(mapear(s)), (e) => console.error(p.join('/'), e));
     },
     assinarDoc(p, cb) {
-      return fs.onSnapshot(ref(p), (s) => cb(s.exists() ? { id: s.id, ...s.data() } : null), (e) => console.error(p.join('/'), e));
+      // doServidor = false quando o documento "não existe" só porque o cache local ainda está vazio (offline).
+      return fs.onSnapshot(ref(p), { includeMetadataChanges: true }, (s) => cb(s.exists() ? { id: s.id, ...s.data() } : null, { doServidor: !s.metadata.fromCache }), (e) => console.error(p.join('/'), e));
     },
     assinarStatus(cb) {
       const at = () => cb(navigator.onLine ? 'Sincronizado' : 'Offline');
       window.addEventListener('online', at); window.addEventListener('offline', at); at();
     },
     // Gravações não são aguardadas: funcionam offline e sincronizam depois.
-    async definir(p, dados, merge = true) { fs.setDoc(ref(p), dados, { merge }); },
+    // Se o servidor recusar (regras), avisa quem chamou por onErro.
+    onErro: null,
+    async definir(p, dados, merge = true) { fs.setDoc(ref(p), dados, { merge }).catch((e) => this.onErro?.(e, p)); },
     // Grava só estes campos, substituindo cada um por inteiro.
-    async substituirCampos(p, dados) { fs.setDoc(ref(p), dados, { mergeFields: Object.keys(dados) }); },
-    async remover(p) { fs.deleteDoc(ref(p)); },
+    async substituirCampos(p, dados) { fs.setDoc(ref(p), dados, { mergeFields: Object.keys(dados) }).catch((e) => this.onErro?.(e, p)); },
+    async remover(p) { fs.deleteDoc(ref(p)).catch((e) => this.onErro?.(e, p)); },
     async criarConvite(nome) {
       const cod = novoCodigo();
       await fs.setDoc(ref(['convites', cod]), { uid, nome, expira: Date.now() + CONVITE_MIN * 60000 });
@@ -182,7 +186,11 @@ async function criarStoreFirebase() {
       fs.deleteDoc(ref(['convites', cod])).catch(() => {});
       return c;
     },
-    async desfazerDupla(outro) { await fs.updateDoc(ref(['perfis', uid]), { parceiros: fs.arrayRemove(outro) }); },
+    // Tira a outra pessoa da minha lista e me tira da lista dela (as regras deixam só se retirar).
+    async desfazerDupla(outro) {
+      await fs.updateDoc(ref(['perfis', uid]), { parceiros: fs.arrayRemove(outro) });
+      await fs.updateDoc(ref(['perfis', outro]), { parceiros: fs.arrayRemove(uid) }).catch(() => {});
+    },
     async exportarTudo() {
       const out = {};
       for (const c of ['config', 'pesos']) out[c] = mapear(await fs.getDocs(col(['usuarios', uid, c])));

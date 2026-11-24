@@ -1,7 +1,7 @@
-import { criarStore, modoLocal, CONVITE_MIN } from './store.js?v=0.1';
-import * as C from './calc.js?v=0.1';
+import { criarStore, modoLocal, CONVITE_MIN } from './store.js?v=0.2';
+import * as C from './calc.js?v=0.2';
 
-const VERSAO = '0.1';
+const VERSAO = '0.2';
 const MAX_PARCEIROS = 5;
 const DIAS_EDITAVEIS = 2; // dá para corrigir até anteontem
 const JANELA_MAPA = 60; // dias publicados no perfil para a dupla
@@ -32,10 +32,12 @@ let paradas = [];
 let paradaFotos = null;
 let parceirosAssinados = '';
 let ultimoPublicado = '';
+let ultimoHoje = C.hoje();
 
 const prefs = () => ({ metaRefeicoes: 80, metaAgua: 2500, descanso: 90, ...D.prefs });
 const diaDoc = (d) => D.dias.find((x) => x.id === d);
-const editavel = (d) => d <= C.hoje() && d >= C.somarDias(C.hoje(), -DIAS_EDITAVEIS);
+// Dá para registrar hoje e corrigir até anteontem, mas não antes do início da ofensiva.
+const editavel = (d) => d <= C.hoje() && d >= C.somarDias(C.hoje(), -DIAS_EDITAVEIS) && d >= (D.perfil?.inicio || '');
 const inicio = () => D.perfil?.inicio || C.hoje();
 const primeiroNome = (n) => String(n || '').split(' ')[0] || 'você';
 
@@ -49,6 +51,7 @@ function toast(msg, ms = 2600) {
 // ---------------- Inicialização ----------------
 async function iniciar() {
   store = await criarStore();
+  store.onErro = (e) => { console.error(e); toast(e?.code === 'permission-denied' ? 'Sem permissão para salvar isso.' : 'Não foi possível salvar. Confira a internet.'); };
   if (modoLocal) {
     $('#btn-login').classList.add('hidden');
     const box = $('#login-local');
@@ -88,16 +91,18 @@ function mostrarApp() {
   $('#app').classList.remove('hidden');
   $('#avatar').innerHTML = avatarInner(usuario.photoURL, usuario.displayName);
   paradas = [
-    store.assinarDoc(['perfis', uid], (p) => {
+    store.assinarDoc(['perfis', uid], (p, meta) => {
+      const primeiraLeitura = !D.perfil;
       const antes = D.perfil?.parceiros || [];
-      D.perfil = p;
       if (!p) {
-        // Primeiro acesso: cria o perfil e começa a ofensiva hoje.
-        store.definir(['perfis', uid], { nome: usuario.displayName || 'Sem nome', foto: usuario.photoURL || '', inicio: C.hoje(), parceiros: [] });
+        // Primeiro acesso: cria o perfil. Só com a confirmação do servidor: offline num aparelho
+        // novo o cache vem vazio e criar aqui apagaria a dupla e o início da ofensiva.
+        if (meta?.doServidor) store.definir(['perfis', uid], { nome: usuario.displayName || 'Sem nome', foto: usuario.photoURL || '', inicio: C.hoje(), parceiros: [] });
         return;
       }
+      D.perfil = p;
       const novos = (p.parceiros || []).filter((x) => !antes.includes(x));
-      if (antes.length && novos.length) toast('🤝 Alguém entrou na sua dupla!');
+      if (!primeiraLeitura && novos.length) toast('🤝 Alguém entrou na sua dupla!');
       if (novos.length && $('#modal-corpo [data-esperando-dupla]')) fecharModal();
       assinarParceiros();
       avisarCutucada();
@@ -155,6 +160,11 @@ const avatarInner = (foto, nome) => (foto
   ? `<img src="${esc(foto)}" alt="" referrerpolicy="no-referrer">`
   : esc(((nome || '?')[0]).toUpperCase()));
 const avatarHTML = (foto, nome) => `<span class="avatar">${avatarInner(foto, nome)}</span>`;
+// Dados da dupla vêm de outra conta: números viram número, estados só os conhecidos, fotos só data:image.
+const n0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const ESTADOS = new Set(['ok', 'gelo', 'falhou', 'pendente', 'semdados']);
+const estado = (v) => (ESTADOS.has(v) ? v : '');
+const imgSrc = (v) => (typeof v === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(v) ? v : '');
 
 // ---------------- Cálculos com os dados ----------------
 function avaliar(d) { return C.avaliarDia(D.plano, d, diaDoc(d), prefs()); }
@@ -185,6 +195,7 @@ function mapaParceiro(pf) {
   const ate = pf?.atualizado || '';
   for (const d of C.diasEntre(C.somarDias(h, -JANELA_MAPA), h)) {
     if (d < (pf?.inicio || h)) continue;
+    mapa[d] = estado(mapa[d]);
     if (!mapa[d] || (mapa[d] === 'pendente' && d < h)) mapa[d] = d >= ate ? 'semdados' : 'falhou';
   }
   return mapa;
@@ -221,7 +232,7 @@ function publicarResumo() {
 
 // ---------------- Gravar o dia ----------------
 function salvarDia(d, patch) {
-  if (!editavel(d)) { toast('Esse dia já fechou. Dá para editar até anteontem.'); return; }
+  if (!editavel(d)) { toast(d < inicio() ? 'Esse dia é antes do início da sua ofensiva.' : 'Esse dia já fechou. Dá para editar até anteontem.'); return; }
   const atual = diaDoc(d) || { id: d };
   const novo = mesclar(atual, patch);
   const treino = C.treinoDoDia(D.plano, d, novo);
@@ -282,6 +293,8 @@ const ringHTML = (pct, centro, ok) => {
   return `<div class="ring-dia ${ok ? 'ok' : ''}"><svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="${r}"/><circle class="fg" cx="50" cy="50" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.min(1, pct))}"/></svg><div class="c">${centro}</div></div>`;
 };
 
+// Série feita: "20 kg × 10", ou "10 reps" sem carga.
+const fmtSerie = (x) => (Number(x.kg) > 0 ? `${num(x.kg)} kg × ${x.reps || '?'}` : `${x.reps || '?'} reps`);
 const seriesTxt = (e) => (e.series > 1 && e.reps ? `${e.series} × ${e.reps}` : e.series > 1 ? `${e.series} séries` : e.reps);
 
 function rotuloCurto(d) {
@@ -312,6 +325,7 @@ function telaHoje() {
   let sub;
   if (!plano) sub = 'Monte seu plano de treino e dieta para começar a ofensiva.';
   else if (futuro) sub = 'Prévia do plano deste dia.';
+  else if (d < inicio()) sub = 'Antes do início da sua ofensiva. Só para consulta.';
   else if (av.cumprido) sub = d === h ? `Dia cumprido! 🔥 Ofensiva de ${plural(of.atual, 'dia', 'dias')}.` : 'Dia cumprido ✓';
   else {
     const falta = [];
@@ -322,7 +336,7 @@ function telaHoje() {
     if (!ed && d < h) sub += ' (já fechou)';
   }
   const pct = Math.round(av.progresso * 100);
-  html += `<div class="hoje-hero fade-in"><div class="txt"><div class="ola">${titulo}</div><div class="sub">${sub}</div></div>${plano && !futuro ? ringHTML(av.progresso, `${av.cumprido ? '✓' : pct + '%'}<small>${av.cumprido ? 'cumprido' : 'do dia'}</small>`, av.cumprido) : ''}</div>`;
+  html += `<div class="hoje-hero fade-in"><div class="txt"><div class="ola">${titulo}</div><div class="sub">${sub}</div></div>${plano && !futuro && d >= inicio() ? ringHTML(av.progresso, `${av.cumprido ? '✓' : pct + '%'}<small>${av.cumprido ? 'cumprido' : 'do dia'}</small>`, av.cumprido) : ''}</div>`;
 
   // Cutucada e reações recebidas
   const c = D.perfil?.cutucada;
@@ -376,7 +390,7 @@ function telaHoje() {
           <div class="t">${esc(r.nome)}</div>
           ${r.itens.length ? `<div class="itens">${r.itens.map(esc).join(' · ')}</div>` : ''}
           ${nota ? `<div class="nota-ref">🔄 ${esc(nota)}</div>` : ''}
-          ${fotos.length ? `<div class="fotos">${fotos.map((f) => `<img src="${f.img}" alt="" data-a="ver-foto" data-id="${f.id}">`).join('')}</div>` : ''}
+          ${fotos.length ? `<div class="fotos">${fotos.map((f) => `<img src="${imgSrc(f.img)}" alt="" data-a="ver-foto" data-id="${esc(f.id)}">`).join('')}</div>` : ''}
           ${ed ? `<div class="st3">
             <button data-a="ref" data-id="${r.id}" data-v="ok" class="${s === 'ok' ? 'on' : ''}">✅ Segui</button>
             <button data-a="ref" data-id="${r.id}" data-v="troca" class="${s === 'troca' ? 'on' : ''}">🔄 Troquei</button>
@@ -418,12 +432,12 @@ function telaTreino() {
     const meta = [seriesTxt(e), e.descanso ? `descanso ${e.descanso >= 60 && e.descanso % 60 === 0 ? e.descanso / 60 + ' min' : e.descanso + 's'}` : ''].filter(Boolean).join(' · ');
     html += `<div class="ex g ${feitos >= (e.series || 1) ? 'feito' : ''}">
       <div class="ex-h"><div class="n">${i + 1}</div><div class="info"><div class="t">${esc(e.nome)}</div><div class="m">${esc(meta)}</div>${e.obs ? `<div class="obs">${esc(e.obs)}</div>` : ''}</div></div>
-      ${ult ? `<div class="ultima">Última vez (${esc(C.rotuloDia(ult.data).toLowerCase())}): <b>${ult.series.map((s) => `${num(s.kg)}kg×${s.reps || '?'}`).join(', ')}</b></div>` : ''}
+      ${ult ? `<div class="ultima">Última vez (${esc(C.rotuloDia(ult.data).toLowerCase())}): <b>${ult.series.map(fmtSerie).join(', ')}</b></div>` : ''}
       <div class="serie-h"><span>#</span><span>kg</span><span>reps</span><span></span></div>`;
     for (let k = 0; k < n; k++) {
       const s = arr[k] || {};
       const ref = ult?.series[k] || ult?.series.at(-1);
-      const phKg = ref ? num(ref.kg) : '';
+      const phKg = ref && Number(ref.kg) > 0 ? num(ref.kg) : '';
       const phReps = ref?.reps || String(e.reps || '').replace(/[^\d-]/g, '').split('-').pop() || '';
       html += `<div class="serie ${s.ok ? 'ok' : ''}">
         <span class="i">${k + 1}</span>
@@ -515,12 +529,14 @@ function cartaoParceiro(p) {
   const duo = ofensivaComParceiro(pf);
   const mapaP = mapaParceiro(pf);
   const nome = esc(primeiroNome(pf.nome));
-  const ofP = pf.ofensiva || { atual: 0 };
+  const ofP = { atual: n0(pf.ofensiva?.atual), gelo: n0(pf.ofensiva?.gelo) };
   const parHoje = mapaP[h] === 'ok';
+  // O resumo "hoje" do perfil só vale se a pessoa abriu o app hoje.
+  const progHoje = pf.atualizado === h ? Math.min(100, n0(pf.hoje?.progresso)) : 0;
 
   // Tira de 14 dias: eu em cima, a dupla embaixo
   const dias = [...C.diasEntre(C.somarDias(h, -13), h)];
-  const cel = (v) => `<i class="${v === 'semdados' ? 'pendente' : v || ''}"></i>`;
+  const cel = (v) => `<i class="${v === 'semdados' ? 'pendente' : estado(v)}"></i>`;
   const tira = `<div class="tira">${dias.map((d) => `<div>${cel(meu.mapa[d])}${cel(mapaP[d])}<span>${C.SEMANA[C.diaSemana(d)][0].toUpperCase()}</span></div>`).join('')}</div>
     <div class="tira-leg"><span>em cima: você · embaixo: ${nome}</span><span>🟩 cumprido · 🟦 congelado</span></div>`;
 
@@ -533,7 +549,7 @@ function cartaoParceiro(p) {
     const pv = dia.prev || {};
     if (pv.treino) {
       const ok = Object.values(dia.series || {}).reduce((a, arr) => a + (arr || []).filter((s) => s && s.ok).length, 0);
-      detalhe += `<div class="linha-st"><span class="s">${dia.treinoFeito ? '✅' : '🏋️'}</span><span>${esc(pv.treino.nome)} <span class="x">· ${dia.treinoFeito ? 'concluído' : `${ok}/${pv.treino.total} séries`}</span></span></div>`;
+      detalhe += `<div class="linha-st"><span class="s">${dia.treinoFeito ? '✅' : '🏋️'}</span><span>${esc(pv.treino.nome)} <span class="x">· ${dia.treinoFeito ? 'concluído' : `${ok}/${n0(pv.treino.total)} séries`}</span></span></div>`;
     } else {
       detalhe += '<div class="linha-st"><span class="s">😌</span><span class="x">Dia de descanso</span></div>';
     }
@@ -543,20 +559,20 @@ function cartaoParceiro(p) {
       const nota = (dia.notas || {})[r.id];
       detalhe += `<div class="linha-st"><span class="s">${ic[s] || '▫️'}</span><span>${esc(r.nome)}${nota ? ` <span class="x">· ${esc(nota)}</span>` : ''}</span></div>`;
     }
-    if (dia.agua) detalhe += `<div class="linha-st"><span class="s">💧</span><span>${num(dia.agua / 1000)} L <span class="x">de ${num((pv.metaAgua || 2500) / 1000)} L</span></span></div>`;
-    const fotos = (o.fotos || []).filter((f) => f.data === h);
-    if (fotos.length) detalhe += `<div class="fotos">${fotos.map((f) => `<img src="${f.img}" alt="" data-a="ver-foto-par" data-p="${p}" data-id="${f.id}">`).join('')}</div>`;
+    if (n0(dia.agua)) detalhe += `<div class="linha-st"><span class="s">💧</span><span>${num(n0(dia.agua) / 1000)} L <span class="x">de ${num((n0(pv.metaAgua) || 2500) / 1000)} L</span></span></div>`;
+    const fotos = (o.fotos || []).filter((f) => f.data === h && imgSrc(f.img));
+    if (fotos.length) detalhe += `<div class="fotos">${fotos.map((f) => `<img src="${imgSrc(f.img)}" alt="" data-a="ver-foto-par" data-p="${esc(p)}" data-id="${esc(f.id)}">`).join('')}</div>`;
   }
   const minha = dia?.reacoes?.[uid];
   const reacoes = ['🔥', '💪', '👏', '❤️', '🥗'].map((e) => `<button class="${minha === e ? 'on' : ''}" data-a="reagir" data-p="${p}" data-v="${e}" ${dia ? '' : 'disabled'}>${e}</button>`).join('');
 
   return `<div class="par g fade-in">
     <div class="par-top">${avatarHTML(pf.foto, pf.nome)}<div class="info"><div class="t">${esc(pf.nome)}</div>
-      <div class="m">🔥 ${plural(ofP.atual || 0, 'dia seguido', 'dias seguidos')}${ofP.gelo ? ` · ❄️ ${ofP.gelo}` : ''} · hoje ${parHoje ? 'cumprido ✓' : `${pf.hoje?.progresso ?? 0}%`}</div></div>
+      <div class="m">🔥 ${plural(ofP.atual, 'dia seguido', 'dias seguidos')}${ofP.gelo ? ` · ❄️ ${ofP.gelo}` : ''} · hoje ${parHoje ? 'cumprido ✓' : `${progHoje}%`}</div></div>
       <button class="ico g" data-a="menu-par" data-p="${p}" aria-label="Opções">⋯</button></div>
     <div class="duo"><div class="av2">${avatarHTML(usuario.photoURL, usuario.displayName)}${avatarHTML(pf.foto, pf.nome)}</div>
       <span class="f ${duo.hojeOk ? '' : 'off'}">🔥</span><span class="num ${duo.atual ? 'on' : ''}">${duo.atual}</span></div>
-    <div class="duo-lbl">${duo.hojeOk ? 'Vocês dois cumpriram hoje! 🎉' : `dias juntos · ${meu.hojeOk ? `falta ${nome}` : parHoje ? 'falta você' : 'falta os dois'} hoje`}${duo.recorde > duo.atual ? ` · recorde ${duo.recorde}` : ''}</div>
+    <div class="duo-lbl">${duo.hojeOk ? 'Vocês dois cumpriram hoje! 🎉' : `dias juntos · ${meu.hojeOk ? `falta ${nome}` : parHoje ? 'falta você' : 'faltam os dois'} hoje`}${duo.recorde > duo.atual ? ` · recorde ${duo.recorde}` : ''}</div>
     ${tira}
     <div class="dia-par"><h4>Hoje de ${nome}</h4>${detalhe}</div>
     <div class="reacoes">${reacoes}<button class="cutucar" data-a="cutucar" data-p="${p}">👉 Cutucar</button></div>
@@ -725,6 +741,9 @@ function modalPlano() {
     f.addEventListener('submit', (e) => {
       e.preventDefault();
       const t = C.lerTreino(f.treino.value); const d = C.lerDieta(f.dieta.value);
+      if (!t.treinos.length && !d.refeicoes.length) { el.querySelector('#previa').innerHTML = '⚠️ Não encontrei treino nem refeições no texto.'; return; }
+      // A ofensiva começa no dia em que o primeiro plano é criado (antes disso não havia o que cumprir).
+      if (!D.plano && D.perfil && (D.perfil.inicio || '') < C.hoje()) store.substituirCampos(['perfis', uid], { inicio: C.hoje() });
       store.definir(['usuarios', uid, 'config', 'plano'], { treinoTexto: f.treino.value, dietaTexto: f.dieta.value, treinos: t.treinos, agenda: t.agenda, refeicoes: d.refeicoes, atualizado: Date.now() }, false);
       fecharModal(); toast('Plano salvo ✓');
     });
@@ -808,7 +827,7 @@ function modalExercicio(exId) {
   const nome = (D.plano?.treinos || []).flatMap((t) => t.exercicios).find((e) => e.id === exId)?.nome || exId;
   const hist = C.historicoExercicio(D.dias, exId);
   abrirModal(nome, `${grafico(hist.map((h) => ({ x: h.data, y: h.kg })), 'kg')}
-    <div class="list g" style="margin-top:14px">${[...hist].reverse().map((h) => `<div class="row"><div class="info"><div class="t">${esc(C.rotuloDia(h.data))}</div><div class="m">${h.series.map((s) => `${num(s.kg)}×${s.reps || '?'}`).join(' · ')}</div></div><div class="v">${num(h.kg)} kg</div></div>`).join('')}</div>`);
+    <div class="list g" style="margin-top:14px">${[...hist].reverse().map((h) => `<div class="row"><div class="info"><div class="t">${esc(C.rotuloDia(h.data))}</div><div class="m">${h.series.map(fmtSerie).join(' · ')}</div></div><div class="v">${num(h.kg)} kg</div></div>`).join('')}</div>`);
 }
 
 // Foto: reduz para ~720px em JPEG para caber no Firestore (limite de 1 MB por documento).
@@ -869,6 +888,12 @@ function ligarEventos() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && usuario) {
       cacheOfensiva = null;
+      if (ultimoHoje !== C.hoje()) {
+        // Passou da meia-noite: volta para o dia de hoje.
+        if (dataSel === ultimoHoje) { dataSel = C.hoje(); assinarFotos(); }
+        mesSel = C.hoje().slice(0, 7);
+        ultimoHoje = C.hoje();
+      }
       if (parceirosAssinados) { const k = parceirosAssinados; parceirosAssinados = ''; for (const p of Object.keys(P)) { P[p].paradas.forEach((f) => f()); delete P[p]; } if (k) assinarParceiros(); }
       agendarRender();
     }
@@ -928,7 +953,7 @@ function aoClicar(e) {
       if (ok) {
         const t = C.treinoDoDia(D.plano, dataSel, dia);
         const exo = t?.exercicios.find((x) => x.id === ex);
-        iniciarTimer(exo?.descanso || prefs().descanso);
+        if (!/min/.test(exo?.reps || '')) iniciarTimer(exo?.descanso || prefs().descanso);
       }
       break;
     }
@@ -955,7 +980,7 @@ function aoClicar(e) {
       const f = a === 'ver-foto' ? D.fotos.find((x) => x.id === id) : (P[b.dataset.p]?.fotos || []).find((x) => x.id === id);
       if (!f) break;
       const meu = a === 'ver-foto' && editavel(f.data);
-      abrirModal('Foto', `<img class="foto-grande" src="${f.img}" alt="">${meu ? '<div class="acoes"><button class="btn danger" data-apagar>Apagar foto</button></div>' : ''}`, (el) => {
+      abrirModal('Foto', `<img class="foto-grande" src="${imgSrc(f.img)}" alt="">${meu ? '<div class="acoes"><button class="btn danger" data-apagar>Apagar foto</button></div>' : ''}`, (el) => {
         el.querySelector('[data-apagar]')?.addEventListener('click', () => { store.remover(['feed', uid, 'fotos', id]); D.fotos = D.fotos.filter((x) => x.id !== id); fecharModal(); });
       });
       break;
