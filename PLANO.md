@@ -47,3 +47,15 @@ Projeto separado do `financas`, mas com a mesma base: HTML/JS puro, GitHub Pages
 Fluxo completo no modo local (Chromium, tela de celular, duas abas): plano de exemplo → refeições → treino com cargas → dia cumprido → código de dupla → reação e cutucada. Sem erros no console.
 Publicado e com login Google funcionando no Firebase real.
 Importação testada com PDF (inclusive tabela de exercícios), Word com tabela e Excel com várias abas.
+
+## Revisão v0.6 (24/11)
+- Placar: sem plano de treino (ou sem dias de treino definidos) o treino valia 15 pontos como "dia de descanso". Agora vale 0 até treinar ou fazer check-in; o descanso do plano continua valendo 15 e aparece como "descanso" no placar.
+- Segurança: tudo que vem de outras contas (dupla, desafios com gente de fora, check-ins, pontos, fotos) passa por uma limpeza na chegada (`fora()`), fotos só como `data:image`, atributos `data-*` escapados. Antes, alguém da dupla ou de um desafio conseguia rodar código no app do outro (testado).
+- Regras: desfazer a dupla vale dos dois lados; foto de refeição só como imagem. 59 casos no emulador (dupla, convites, desafios, códigos de entrada, check-ins, reações).
+- Leitura do plano por texto aceita markdown (títulos, negrito, listas, "4 séries de 10", "Segunda-feira: Pernas", "Opção 2"), com o mesmo resultado de antes para o texto que a importação de arquivos gera.
+- Offline num aparelho novo, o perfil não é mais recriado (apagaria a dupla).
+- A ofensiva começa no dia em que o primeiro plano é salvo; dias antes do início não são editáveis.
+- App aberto de um dia para o outro volta para hoje; aviso da primeira dupla; progresso de hoje da dupla não mostra o de ontem.
+- Foto da refeição pode vir da galeria; cronômetro não dispara em exercício por tempo; séries sem carga como "10 reps"; erros ao salvar aparecem na tela.
+- Testes: `node --test testes/*.test.mjs` (leitura do plano, dia cumprido, ofensiva, placar).
+- **Publicar as regras**: o Firebase só usa o `firestore.rules` novo depois de colado no console (Firestore → Regras → Publicar).

@@ -1,4 +1,4 @@
-import { slug } from './calc.js?v=0.5';
+import { slug } from './calc.js?v=0.6';
 
 // Importar plano de arquivo (PDF, Word, Excel, CSV ou texto). Carregado só ao escolher um arquivo.
 // Cada leitor devolve "linhas": listas de células (parágrafo = 1 célula, linha de tabela = várias).

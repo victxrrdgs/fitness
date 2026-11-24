@@ -1,7 +1,7 @@
-import { criarStore, modoLocal, CONVITE_MIN, ENTRADA_DIAS } from './store.js?v=0.5';
-import * as C from './calc.js?v=0.5';
+import { criarStore, modoLocal, CONVITE_MIN, ENTRADA_DIAS } from './store.js?v=0.6';
+import * as C from './calc.js?v=0.6';
 
-const VERSAO = '0.5';
+const VERSAO = '0.6';
 const MAX_PARCEIROS = 5;
 const DIAS_EDITAVEIS = 2; // dá para corrigir até anteontem
 const JANELA_MAPA = 60; // dias publicados no perfil para a dupla
@@ -10,6 +10,18 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
+// Dados que vêm de outras contas (dupla, desafios) não são confiáveis: troca os caracteres que
+// quebrariam o HTML por equivalentes inofensivos, em todos os textos e chaves, recursivamente.
+// Fotos (data:image em base64) não têm esses caracteres e passam intactas.
+const TROCA = { '<': '‹', '>': '›', '"': '”', "'": '’', '`': '´' };
+const fora = (v) => (typeof v === 'string' ? v.replace(/[<>"'`]/g, (c) => TROCA[c])
+  : Array.isArray(v) ? v.map(fora)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [fora(k), fora(x)])) : v);
+const n0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+// Foto só se for imagem em base64 (nada de URL ou script).
+const imgSrc = (v) => (typeof v === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(v) ? v : '');
+const ESTADOS = new Set(['ok', 'gelo', 'falhou', 'pendente', 'semdados']);
+const estado = (v) => (ESTADOS.has(v) ? v : '');
 const num = (v) => new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(v || 0);
 const ehObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 function mesclar(a, b) {
@@ -37,10 +49,12 @@ let paradas = [];
 let paradaFotos = null;
 let parceirosAssinados = '';
 let ultimoPublicado = '';
+let ultimoHoje = C.hoje();
 
 const prefs = () => ({ metaRefeicoes: 80, metaAgua: 2500, descanso: 90, ...D.prefs });
 const diaDoc = (d) => D.dias.find((x) => x.id === d);
-const editavel = (d) => d <= C.hoje() && d >= C.somarDias(C.hoje(), -DIAS_EDITAVEIS);
+// Dá para registrar hoje e corrigir até anteontem, mas não antes do início da ofensiva.
+const editavel = (d) => d <= C.hoje() && d >= C.somarDias(C.hoje(), -DIAS_EDITAVEIS) && d >= inicio();
 const inicio = () => C.inicioEfetivo(D.perfil?.inicio);
 const primeiroNome = (n) => String(n || '').split(' ')[0] || 'você';
 
@@ -54,11 +68,12 @@ function toast(msg, ms = 2600) {
 // ---------------- Inicialização ----------------
 async function iniciar() {
   store = await criarStore();
+  store.onErro = (e) => { console.error(e); toast(e?.code === 'permission-denied' ? 'Sem permissão para salvar isso.' : 'Não foi possível salvar. Confira a internet.'); };
   if (modoLocal) {
     $('#btn-login').classList.add('hidden');
     const box = $('#login-local');
     box.classList.remove('hidden');
-    box.innerHTML = Object.entries(store.contasTeste).map(([k, c]) => `<button class="btn ${k === 'eu' ? 'primary' : ''} big" data-conta="${k}">Entrar como ${esc(c.displayName)}</button>`).join('')
+    box.innerHTML = Object.entries(store.contasTeste).map(([k, c]) => `<button class="btn ${k === 'eu' ? 'primary' : ''} big" data-conta="${esc(k)}">Entrar como ${esc(c.displayName)}</button>`).join('')
       + '<p class="aviso">Modo local de teste: os dados ficam só neste navegador. Para testar a dupla, abra outra aba e entre com a outra conta.</p>';
     box.addEventListener('click', (e) => { const b = e.target.closest('[data-conta]'); if (b) store.entrar(b.dataset.conta); });
   }
@@ -96,16 +111,19 @@ function mostrarApp() {
   $('#app').classList.remove('hidden');
   $('#avatar').innerHTML = avatarInner(usuario.photoURL, usuario.displayName);
   paradas = [
-    store.assinarDoc(['perfis', uid], (p) => {
+    store.assinarDoc(['perfis', uid], (p, meta) => {
+      const primeiraLeitura = !D.perfil;
       const antes = D.perfil?.parceiros || [];
-      D.perfil = p;
       if (!p) {
-        // Primeiro acesso: cria o perfil e começa a ofensiva hoje.
-        store.definir(['perfis', uid], { nome: usuario.displayName || 'Sem nome', foto: usuario.photoURL || '', inicio: C.hoje(), parceiros: [] });
+        // Primeiro acesso: cria o perfil. Só com a confirmação do servidor: offline num aparelho
+        // novo o cache vem vazio e criar aqui apagaria a dupla e o início da ofensiva.
+        if (meta?.doServidor) store.definir(['perfis', uid], { nome: usuario.displayName || 'Sem nome', foto: usuario.photoURL || '', inicio: C.hoje(), parceiros: [] });
         return;
       }
+      // A cutucada é escrita pela dupla.
+      D.perfil = p.cutucada ? { ...p, cutucada: fora(p.cutucada) } : p;
       const novos = (p.parceiros || []).filter((x) => !antes.includes(x));
-      if (antes.length && novos.length) toast('🤝 Alguém entrou na sua dupla!');
+      if (!primeiraLeitura && novos.length) toast('🤝 Alguém entrou na sua dupla!');
       if (novos.length && $('#modal-corpo [data-esperando-dupla]')) fecharModal();
       assinarParceiros();
       avisarCutucada();
@@ -115,7 +133,7 @@ function mostrarApp() {
     store.assinarDoc(['usuarios', uid, 'config', 'plano'], (p) => { D.plano = p; agendarRender(); }),
     store.assinarCol(['feed', uid, 'dias'], (l) => { D.dias = l; agendarRender(); }),
     store.assinarCol(['usuarios', uid, 'pesos'], (l) => { D.pesos = l.sort((a, b) => (a.id < b.id ? -1 : 1)); agendarRender(); }),
-    store.assinarCol(['desafios'], (l) => { D.desafios = l.sort((a, b) => (a.inicio < b.inicio ? 1 : -1)); sincronizarDesafios(); agendarRender(); }, ['membros', 'array-contains', uid]),
+    store.assinarCol(['desafios'], (l) => { D.desafios = fora(l).filter((x) => Array.isArray(x.membros)).sort((a, b) => (a.inicio < b.inicio ? 1 : -1)); sincronizarDesafios(); agendarRender(); }, ['membros', 'array-contains', uid]),
   ];
   assinarFotos();
   const q = new URLSearchParams(location.search);
@@ -164,7 +182,7 @@ function fotosDoCheckin(dId, c) {
   if (Array.isArray(f)) return f;
   if (!f && c.nFotos) {
     fotosDesafio[c.id] = 'carregando';
-    store.lerDoc(['desafios', dId, 'fotos', c.id]).then((x) => { fotosDesafio[c.id] = x?.fotos || []; agendarRender(); })
+    store.lerDoc(['desafios', dId, 'fotos', c.id]).then((x) => { fotosDesafio[c.id] = (Array.isArray(x?.fotos) ? x.fotos : []).map(imgSrc).filter(Boolean); agendarRender(); })
       .catch(() => { fotosDesafio[c.id] = []; });
   }
   return [];
@@ -181,10 +199,10 @@ function assinarParceiros() {
     if (P[p]) continue;
     const o = P[p] = { perfil: null, dias: [], fotos: [], checkins: [], paradas: [] };
     o.paradas.push(
-      store.assinarDoc(['perfis', p], (x) => { o.perfil = x; agendarRender(); }),
-      store.assinarCol(['feed', p, 'dias'], (l) => { o.dias = l; agendarRender(); }),
-      store.assinarCol(['feed', p, 'fotos'], (l) => { o.fotos = l.filter((f) => f.data === h); agendarRender(); }, ['data', '==', h]),
-      store.assinarCol(['feed', p, 'checkins'], (l) => { o.checkins = l.filter((f) => f.data === h).sort((a, b) => a.em - b.em); agendarRender(); }, ['data', '==', h]),
+      store.assinarDoc(['perfis', p], (x) => { o.perfil = fora(x); agendarRender(); }),
+      store.assinarCol(['feed', p, 'dias'], (l) => { o.dias = fora(l); agendarRender(); }),
+      store.assinarCol(['feed', p, 'fotos'], (l) => { o.fotos = fora(l).filter((f) => f.data === h && imgSrc(f.img)); agendarRender(); }, ['data', '==', h]),
+      store.assinarCol(['feed', p, 'checkins'], (l) => { o.checkins = fora(l).filter((f) => f.data === h).sort((a, b) => n0(a.em) - n0(b.em)); agendarRender(); }, ['data', '==', h]),
     );
   }
 }
@@ -265,6 +283,8 @@ function pontosDe(d) {
   const dia = diaDoc(d) || {};
   const av = avaliar(d);
   av.progressoTreino = C.progressoTreino(C.treinoDoDia(D.plano, d, dia), dia);
+  // Só é dia de descanso se o plano tem treinos com dias definidos e hoje não é um deles.
+  av.descansoPlanejado = !!(D.plano?.treinos?.length && Object.keys(D.plano.agenda || {}).length);
   return C.pontosDia({ m: metas(d), comidas: comidasDe(d), av, dia, checkins: D.ckJanela.filter((x) => x.data === d), metaAgua: metaAgua(d) });
 }
 
@@ -324,7 +344,7 @@ function publicarResumo() {
 
 // ---------------- Gravar o dia ----------------
 function salvarDia(d, patch) {
-  if (!editavel(d)) { toast('Esse dia já fechou. Dá para editar até anteontem.'); return; }
+  if (!editavel(d)) { toast(d < inicio() ? 'Esse dia é antes do início da sua ofensiva.' : 'Esse dia já fechou. Dá para editar até anteontem.'); return; }
   const atual = diaDoc(d) || { id: d };
   const novo = mesclar(atual, patch);
   const treino = C.treinoDoDia(D.plano, d, novo);
@@ -410,6 +430,8 @@ const ringHTML = (pct, centro, ok) => {
   return `<div class="ring-dia ${ok ? 'ok' : ''}"><svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="${r}"/><circle class="fg" cx="50" cy="50" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.min(1, pct))}"/></svg><div class="c">${centro}</div></div>`;
 };
 
+// Série feita: "20 kg × 10", ou "10 reps" sem carga.
+const fmtSerie = (x) => (Number(x.kg) > 0 ? `${num(x.kg)} kg × ${x.reps || '?'}` : `${x.reps || '?'} reps`);
 const seriesTxt = (e) => (e.series > 1 && e.reps ? `${e.series} × ${e.reps}` : e.series > 1 ? `${e.series} séries` : e.reps);
 
 function rotuloCurto(d) {
@@ -509,12 +531,12 @@ function telaHoje() {
           <div class="t">${esc(r.nome)}</div>
           ${itensRef(d, r).length ? `<div class="itens">${itensRef(d, r).map(esc).join(' · ')}${cardapioDe(d)?.[r.id]?.kcal ? ` <span class="kc">· ${cardapioDe(d)[r.id].kcal} kcal</span>` : ''}</div>` : ''}
           ${nota ? `<div class="nota-ref">🔄 ${esc(nota)}</div>` : ''}
-          ${fotos.length ? `<div class="fotos">${fotos.map((f) => `<img src="${f.img}" alt="" data-a="ver-foto" data-id="${f.id}">`).join('')}</div>` : ''}
+          ${fotos.length ? `<div class="fotos">${fotos.map((f) => `<img src="${imgSrc(f.img)}" alt="" data-a="ver-foto" data-id="${esc(f.id)}">`).join('')}</div>` : ''}
           ${ed ? `<div class="st3">
-            <button data-a="ref" data-id="${r.id}" data-v="ok" class="${s === 'ok' ? 'on' : ''}">✅ Segui</button>
-            <button data-a="ref" data-id="${r.id}" data-v="troca" class="${s === 'troca' ? 'on' : ''}">🔄 Troquei</button>
-            <button data-a="ref" data-id="${r.id}" data-v="pulou" class="${s === 'pulou' ? 'on' : ''}">❌ Pulei</button>
-            <button class="cam" data-a="foto" data-id="${r.id}" aria-label="Foto da refeição"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+            <button data-a="ref" data-id="${esc(r.id)}" data-v="ok" class="${s === 'ok' ? 'on' : ''}">✅ Segui</button>
+            <button data-a="ref" data-id="${esc(r.id)}" data-v="troca" class="${s === 'troca' ? 'on' : ''}">🔄 Troquei</button>
+            <button data-a="ref" data-id="${esc(r.id)}" data-v="pulou" class="${s === 'pulou' ? 'on' : ''}">❌ Pulei</button>
+            <button class="cam" data-a="foto" data-id="${esc(r.id)}" aria-label="Foto da refeição"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
           </div>` : ''}
         </div></div>`;
     }
@@ -541,9 +563,9 @@ function cartaoPlacar(d) {
   const p = pontosDe(d);
   const rivais = (D.perfil?.parceiros || []).filter((x) => x !== uid && P[x]?.perfil).slice(0, 2)
     .map((x) => `<span class="pl-rival">${avatarHTML(P[x].perfil.foto, P[x].perfil.nome)}<b>${pontosParceiro(x, d)?.total ?? '–'}</b></span>`).join('');
-  return `<button class="placar g fade-in" data-a="ver-placar" data-id="${d}">
+  return `<button class="placar g fade-in" data-a="ver-placar" data-id="${esc(d)}">
     <div class="pl-top"><div class="info"><div class="lbl">Placar do dia${p.equilibrio ? ' · <span class="eq">⚖️ equilíbrio +10%</span>' : ''}</div><div class="pl-n">${p.total}<small>/100</small></div></div>${rivais ? `<div class="pl-rivais"><small>vs</small>${rivais}</div>` : ''}</div>
-    <div class="pl-cats">${Object.entries(C.PESOS).map(([k, max]) => `<div class="pl-cat"><span>${C.PESOS_NOME[k]}</span><div class="barra"><div style="width:${Math.round((p.cats[k] / max) * 100)}%"></div></div><b>${Math.round(p.cats[k])}<small>/${max}</small></b></div>`).join('')}</div>
+    <div class="pl-cats">${Object.entries(C.PESOS).map(([k, max]) => `<div class="pl-cat"><span>${C.PESOS_NOME[k]}${k === 'treino' && p.descanso ? ' <small>· descanso</small>' : ''}</span><div class="barra"><div style="width:${Math.round((p.cats[k] / max) * 100)}%"></div></div><b>${Math.round(p.cats[k])}<small>/${max}</small></b></div>`).join('')}</div>
   </button>`;
 }
 
@@ -556,7 +578,7 @@ function modalPlacar(d) {
     ${p.notas.length ? `<div class="sec"><div class="sec-h"><h3>Notas das refeições</h3></div><div class="list g">${p.notas.map((x) => `<div class="row"><div class="info"><div class="t">${esc(x.nome)}</div><div class="m">${esc(x.motivos.join(' · '))}</div></div><span class="nota-b ${x.nota >= 7 ? 'boa' : x.nota >= 5 ? 'media' : 'ruim'}">${num(x.nota)}</span></div>`).join('')}</div></div>` : ''}
     <div class="sec"><div class="sec-h"><h3>Como conta</h3></div><p class="ajuda-fmt">
       <b>Alimentação (35)</b>: calorias na faixa do seu objetivo (15), proteína (10) e qualidade das refeições (10). Sem registrar na aba Comer, vale até 70% pelas refeições do plano marcadas.<br>
-      <b>Treino (25)</b>: treino do plano ou check-in. Dia de descanso planejado vale 15.<br>
+      <b>Treino (25)</b>: treino do plano ou check-in. Dia de descanso do plano vale 15 (sem plano de treino, não há descanso: vale 0 até treinar).<br>
       <b>Cardio (15)</b>: minutos de corrida, caminhada, bike, natação, funcional ou esporte (meta ${m.cardioSemana} min por semana).<br>
       <b>Água (10)</b>: meta de ${num(metaAgua(d) / 1000)} L.<br>
       <b>Bônus (15)</b>: sono de ${m.sono} h ou mais (6), dia sem álcool (3), 8 mil passos (3), 3 refeições registradas (3).<br>
@@ -618,13 +640,13 @@ function telaComer() {
     const lista = itens.filter((x) => (x.grupo || 'extra') === g.id);
     const n = notas[g.id];
     if (!lista.length) {
-      if (ed) html += `<button class="grupo-vazio" data-a="comida-add" data-v="buscar" data-grupo="${g.id}"><span>${esc(g.hora)}</span>${esc(g.nome)}<i>+ adicionar</i></button>`;
+      if (ed) html += `<button class="grupo-vazio" data-a="comida-add" data-v="buscar" data-grupo="${esc(g.id)}"><span>${esc(g.hora)}</span>${esc(g.nome)}<i>+ adicionar</i></button>`;
       continue;
     }
     html += `<div class="sec grupo"><div class="sec-h"><h3>${g.hora ? `<small>${esc(g.hora)}</small> ` : ''}${esc(g.nome)}</h3>${n ? `<span class="nota-b ${n.nota >= 7 ? 'boa' : n.nota >= 5 ? 'media' : 'ruim'}">nota ${num(n.nota)}</span>` : ''}</div>
       ${n ? `<div class="motivos">${esc(n.motivos.join(' · '))}</div>` : ''}
-      <div class="list g">${lista.map((x) => `<div class="row clic" data-a="comida-ver" data-id="${x.id}"><div class="info"><div class="t">${esc(x.nome)}</div><div class="m">${esc(x.medida || `${num(x.gramas)} g`)}${x.marca ? ` · ${esc(x.marca)}` : ''} · P ${num(x.p)} · C ${num(x.cb)} · G ${num(x.g)}${x.nova === 4 ? ' · <span class="ultra">ultraprocessado</span>' : ''}</div></div><div class="v">${Math.round(x.kcal)} kcal</div></div>`).join('')}
-      ${ed ? `<button class="mais-serie" data-a="comida-add" data-v="buscar" data-grupo="${g.id}">+ adicionar em ${esc(g.nome.toLowerCase())}</button>` : ''}</div></div>`;
+      <div class="list g">${lista.map((x) => `<div class="row clic" data-a="comida-ver" data-id="${esc(x.id)}"><div class="info"><div class="t">${esc(x.nome)}</div><div class="m">${esc(x.medida || `${num(x.gramas)} g`)}${x.marca ? ` · ${esc(x.marca)}` : ''} · P ${num(x.p)} · C ${num(x.cb)} · G ${num(x.g)}${x.nova === 4 ? ' · <span class="ultra">ultraprocessado</span>' : ''}</div></div><div class="v">${Math.round(x.kcal)} kcal</div></div>`).join('')}
+      ${ed ? `<button class="mais-serie" data-a="comida-add" data-v="buscar" data-grupo="${esc(g.id)}">+ adicionar em ${esc(g.nome.toLowerCase())}</button>` : ''}</div></div>`;
   }
   html += '<p class="rodape">Alimentos: TACO (NEPA/UNICAMP) e Open Food Facts. Estimativas, não substituem a nutricionista.</p>';
   return html;
@@ -635,11 +657,11 @@ async function modalComida(modo = 'buscar', grupo = null, existente = null) {
   grupo ||= existente?.grupo || grupoAgora();
   abrirModal(existente ? 'Editar alimento' : 'Adicionar alimento', '<div class="vazio">Carregando…</div>');
   let K;
-  try { K = await import('./comida.js?v=0.5'); } catch (e) { $('#modal-corpo').innerHTML = '<p class="erro">Sem conexão para carregar a busca.</p>'; return; }
+  try { K = await import('./comida.js?v=0.6'); } catch (e) { $('#modal-corpo').innerHTML = '<p class="erro">Sem conexão para carregar a busca.</p>'; return; }
   const corpo = $('#modal-corpo');
   if (existente) { quantidade(existente.alimento || null); return; }
 
-  const abas = `<div class="abas" style="margin-bottom:12px">${[['buscar', '🔎 Buscar'], ['codigo', '📷 Código'], ['manual', '✍️ Manual']].map(([k, n]) => `<button class="${k === modo ? 'on' : ''}" data-modo="${k}">${n}</button>`).join('')}</div>`;
+  const abas = `<div class="abas" style="margin-bottom:12px">${[['buscar', '🔎 Buscar'], ['codigo', '📷 Código'], ['manual', '✍️ Manual']].map(([k, n]) => `<button class="${k === modo ? 'on' : ''}" data-modo="${esc(k)}">${n}</button>`).join('')}</div>`;
   const desenhar = () => {
     if (modo === 'buscar') {
       corpo.innerHTML = `${abas}<form id="f-busca"><input name="q" placeholder="Ex.: arroz, frango grelhado, banana" autocomplete="off"></form><div id="resultados" class="resultados"></div>
@@ -648,7 +670,7 @@ async function modalComida(modo = 'buscar', grupo = null, existente = null) {
       setTimeout(() => f.q.focus(), 200);
       let tm;
       const listar = (lista, vazio) => {
-        corpo.querySelector('#resultados').innerHTML = lista.length ? lista.map((a, i) => `<div class="row clic" data-i="${i}"><div class="info"><div class="t">${esc(a.nome)}</div><div class="m">${a.marca ? esc(a.marca) + ' · ' : ''}${a.por100.kcal} kcal/100 g · P ${num(a.por100.p)} g${a.nova === 4 ? ' · <span class="ultra">ultraprocessado</span>' : ''}</div></div><span class="seta">›</span></div>`).join('') : `<p class="rodape">${vazio}</p>`;
+        corpo.querySelector('#resultados').innerHTML = lista.length ? lista.map((a, i) => `<div class="row clic" data-i="${esc(i)}"><div class="info"><div class="t">${esc(a.nome)}</div><div class="m">${a.marca ? esc(a.marca) + ' · ' : ''}${a.por100.kcal} kcal/100 g · P ${num(a.por100.p)} g${a.nova === 4 ? ' · <span class="ultra">ultraprocessado</span>' : ''}</div></div><span class="seta">›</span></div>`).join('') : `<p class="rodape">${vazio}</p>`;
         corpo.querySelector('#resultados').onclick = (e) => { const r = e.target.closest('[data-i]'); if (r) quantidade(lista[Number(r.dataset.i)]); };
       };
       f.q.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(async () => { if (f.q.value.trim().length >= 2) listar(await K.buscarTaco(f.q.value), 'Nada na tabela TACO. Tente outro nome ou procure nos produtos.'); }, 200); });
@@ -706,7 +728,7 @@ async function modalComida(modo = 'buscar', grupo = null, existente = null) {
     let medida = x?.medida || '';
     corpo.innerHTML = `<form id="f-qtd">
       <div class="al-nome"><b>${esc(a.nome)}</b>${a.marca ? `<small>${esc(a.marca)}</small>` : ''}<small>${Math.round(a.por100.kcal)} kcal a cada 100 g${a.nova ? ` · ${esc(C.NOVA[a.nova])}` : ''}${a.nutriscore ? ` · Nutri-Score ${a.nutriscore.toUpperCase()}` : ''}</small></div>
-      ${medidas.length > 1 ? `<label>Medida</label><div class="chips">${medidas.map((md, i) => `<button type="button" class="chip ${!x && md === (porcao || medidas.at(-1)) ? 'on' : ''}" data-md="${i}">${esc(md.nome)}${md.nome === '100 g' ? '' : ` <small>${num(md.g)} g</small>`}</button>`).join('')}</div>` : ''}
+      ${medidas.length > 1 ? `<label>Medida</label><div class="chips">${medidas.map((md, i) => `<button type="button" class="chip ${!x && md === (porcao || medidas.at(-1)) ? 'on' : ''}" data-md="${esc(i)}">${esc(md.nome)}${md.nome === '100 g' ? '' : ` <small>${num(md.g)} g</small>`}</button>`).join('')}</div>` : ''}
       <div class="linha"><div><label>Quantas</label><input name="qtd" inputmode="decimal" value="1"></div><div><label>Gramas</label><input name="gramas" inputmode="decimal" value="${num(gramas)}" required></div></div>
       <label>Refeição</label><div class="chips">${gruposRefeicao().map((g) => `<label><input type="radio" name="grupo" value="${g.id}" ${g.id === grupo ? 'checked' : ''}>${esc(g.nome)}</label>`).join('')}</div>
       <div id="prev" class="aviso"></div>
@@ -799,7 +821,7 @@ function secaoCheckins(d, ed) {
     return `<div class="sec"><button class="checkin-cta g" data-a="checkin"><span class="e">📸</span><span class="info"><b>Fazer check-in</b><small>Foto, tempo e local do treino${ativos ? ` · conta em ${plural(ativos, 'desafio', 'desafios')}` : ''}</small></span><span class="seta">›</span></button></div>`;
   }
   return `<div class="sec"><div class="sec-h"><h3>📸 Check-in${lista.length > 1 ? 's' : ''}</h3>${ed ? '<button data-a="checkin">+ Novo</button>' : ''}</div><div class="list g">`
-    + lista.map((c) => `<div class="row clic" data-a="ver-checkin" data-id="${c.id}">${(c.fotos || [])[0] ? `<img class="thumb" src="${c.fotos[0]}" alt="">` : `<div class="ic">${C.tipoInfo(c.tipo).e}</div>`}
+    + lista.map((c) => `<div class="row clic" data-a="ver-checkin" data-id="${esc(c.id)}">${(c.fotos || [])[0] ? `<img class="thumb" src="${imgSrc(c.fotos[0])}" alt="">` : `<div class="ic">${C.tipoInfo(c.tipo).e}</div>`}
       <div class="info"><div class="t">${C.tipoInfo(c.tipo).e} ${esc(c.titulo || C.tipoInfo(c.tipo).nome)}</div><div class="m">${resumoCheckin(c)}</div></div><span class="seta">›</span></div>`).join('')
     + '</div></div>';
 }
@@ -845,7 +867,7 @@ function modalCheckin(pre = {}, existente = null) {
   </form>`, (el) => {
     const f = el.querySelector('form');
     const desenharFotos = () => {
-      el.querySelector('#ck-fotos').innerHTML = fotos.map((src, i) => `<div><img src="${src}" alt=""><button type="button" data-tirar="${i}" aria-label="Tirar foto">✕</button></div>`).join('')
+      el.querySelector('#ck-fotos').innerHTML = fotos.map((src, i) => `<div><img src="${imgSrc(src)}" alt=""><button type="button" data-tirar="${esc(i)}" aria-label="Tirar foto">✕</button></div>`).join('')
         || '<div class="ck-vazio">📸<small>Sem foto ainda</small></div>';
     };
     const marcados = new Set(existente ? existente.desafios || [] : desafiosAtivos(dataPadrao).map((x) => x.id));
@@ -947,21 +969,21 @@ function telaTreino() {
     const meta = [seriesTxt(e), e.descanso ? `descanso ${e.descanso >= 60 && e.descanso % 60 === 0 ? e.descanso / 60 + ' min' : e.descanso + 's'}` : ''].filter(Boolean).join(' · ');
     html += `<div class="ex g ${feitos >= (e.series || 1) ? 'feito' : ''}">
       <div class="ex-h"><div class="n">${i + 1}</div><div class="info"><div class="t">${esc(e.nome)}</div><div class="m">${esc(meta)}</div>${e.obs ? `<div class="obs">${esc(e.obs)}</div>` : ''}</div></div>
-      ${ult ? `<div class="ultima">Última vez (${esc(C.rotuloDia(ult.data).toLowerCase())}): <b>${ult.series.map((s) => `${num(s.kg)}kg×${s.reps || '?'}`).join(', ')}</b></div>` : ''}
+      ${ult ? `<div class="ultima">Última vez (${esc(C.rotuloDia(ult.data).toLowerCase())}): <b>${ult.series.map(fmtSerie).join(', ')}</b></div>` : ''}
       <div class="serie-h"><span>#</span><span>kg</span><span>reps</span><span></span></div>`;
     for (let k = 0; k < n; k++) {
       const s = arr[k] || {};
       const ref = ult?.series[k] || ult?.series.at(-1);
-      const phKg = ref ? num(ref.kg) : '';
+      const phKg = ref && Number(ref.kg) > 0 ? num(ref.kg) : '';
       const phReps = ref?.reps || String(e.reps || '').replace(/[^\d-]/g, '').split('-').pop() || '';
       html += `<div class="serie ${s.ok ? 'ok' : ''}">
         <span class="i">${k + 1}</span>
-        <input inputmode="decimal" placeholder="${esc(phKg)}" value="${s.kg ?? ''}" data-ex="${e.id}" data-k="${k}" data-f="kg" ${ed ? '' : 'disabled'}>
-        <input inputmode="numeric" placeholder="${esc(phReps)}" value="${s.reps ?? ''}" data-ex="${e.id}" data-k="${k}" data-f="reps" ${ed ? '' : 'disabled'}>
-        <button class="chk ${s.ok ? 'on' : ''}" data-a="serie" data-ex="${e.id}" data-k="${k}" ${ed ? '' : 'disabled'} aria-label="Série feita">✓</button>
+        <input inputmode="decimal" placeholder="${esc(phKg)}" value="${s.kg ?? ''}" data-ex="${esc(e.id)}" data-k="${esc(k)}" data-f="kg" ${ed ? '' : 'disabled'}>
+        <input inputmode="numeric" placeholder="${esc(phReps)}" value="${s.reps ?? ''}" data-ex="${esc(e.id)}" data-k="${esc(k)}" data-f="reps" ${ed ? '' : 'disabled'}>
+        <button class="chk ${s.ok ? 'on' : ''}" data-a="serie" data-ex="${esc(e.id)}" data-k="${esc(k)}" ${ed ? '' : 'disabled'} aria-label="Série feita">✓</button>
       </div>`;
     }
-    if (ed) html += `<button class="mais-serie" data-a="mais-serie" data-ex="${e.id}">+ série</button>`;
+    if (ed) html += `<button class="mais-serie" data-a="mais-serie" data-ex="${esc(e.id)}">+ série</button>`;
     html += '</div>';
   });
   if (ed) {
@@ -1021,7 +1043,7 @@ function bip() {
 
 // ---------- Juntos: desafios e dupla ----------
 function telaJuntos() {
-  const seg = `<div class="abas">${[['placar', '⚔️ Placar'], ['desafios', '🏆 Desafios'], ['dupla', '🤝 Dupla']].map(([k, n]) => `<button class="${aba === k ? 'on' : ''}" data-a="aba" data-id="${k}">${n}</button>`).join('')}</div>`;
+  const seg = `<div class="abas">${[['placar', '⚔️ Placar'], ['desafios', '🏆 Desafios'], ['dupla', '🤝 Dupla']].map(([k, n]) => `<button class="${aba === k ? 'on' : ''}" data-a="aba" data-id="${esc(k)}">${n}</button>`).join('')}</div>`;
   return `<div class="hero fade-in" style="padding-bottom:14px"><div class="ola">Juntos</div></div>${seg}${aba === 'dupla' ? telaDupla() : aba === 'placar' ? telaPlacarJuntos() : telaDesafios()}`;
 }
 
@@ -1106,8 +1128,8 @@ function sincronizarDesafios() {
   for (const id of ids) {
     if (DS[id]) continue;
     const o = DS[id] = { checkins: [], pontos: [], parada: () => {} };
-    const a = store.assinarCol(['desafios', id, 'checkins'], (l) => { o.checkins = l.sort((x, y) => y.em - x.em); agendarRender(); });
-    const b = store.assinarCol(['desafios', id, 'pontos'], (l) => { o.pontos = l; agendarRender(); });
+    const a = store.assinarCol(['desafios', id, 'checkins'], (l) => { o.checkins = fora(l).sort((x, y) => n0(y.em) - n0(x.em)); agendarRender(); });
+    const b = store.assinarCol(['desafios', id, 'pontos'], (l) => { o.pontos = fora(l); agendarRender(); });
     o.parada = () => { a(); b(); };
   }
 }
@@ -1123,7 +1145,7 @@ function telaDesafios() {
   for (const { d, st } of lista) {
     const placar = C.placarDesafio(d, DS[d.id]?.checkins || [], DS[d.id]?.pontos || []);
     const meu = placar.find((p) => p.uid === uid);
-    html += `<button class="desafio g fade-in ${st.fase}" data-a="abrir-desafio" data-id="${d.id}">
+    html += `<button class="desafio g fade-in ${st.fase}" data-a="abrir-desafio" data-id="${esc(d.id)}">
       <div class="d-top"><div class="info"><div class="t">🏆 ${esc(d.nome)}</div><div class="m">${esc(faseTxt(d, st))}</div></div>${meu?.pontos && st.fase !== 'futuro' ? `<div class="pos">${medalha(meu.pos)}</div>` : ''}</div>
       <div class="barra"><div style="width:${st.fase === 'futuro' ? 0 : Math.round((st.dia / st.total) * 100)}%"></div></div>
       <div class="d-placar">${placar.slice(0, 3).map((p) => { const pe = pessoaDesafio(d, p.uid); return `<span>${avatarHTML(pe.foto, pe.nome)}<b>${esc(primeiroNome(pe.nome))}</b><small>${esc(pontosTxt(d, p))}</small></span>`; }).join('')}</div>
@@ -1142,11 +1164,11 @@ function telaDesafio() {
   const h = C.hoje();
   const fezHoje = cks.some((c) => c.uid === uid && c.data === h);
   let html = `<div class="treino-head fade-in"><button class="voltar" data-a="ir" data-id="dupla">‹ Desafios</button>
-    <div class="d-head"><h2>🏆 ${esc(d.nome)}</h2><button class="ico g" data-a="menu-desafio" data-id="${d.id}" aria-label="Opções">⋯</button></div>
+    <div class="d-head"><h2>🏆 ${esc(d.nome)}</h2><button class="ico g" data-a="menu-desafio" data-id="${esc(d.id)}" aria-label="Opções">⋯</button></div>
     <div class="m">${esc(dataCurta(d.inicio))} – ${esc(dataCurta(d.fim))} · ${(CRITERIO[d.criterio] || CRITERIO.dias)[1]} · ${plural(d.membros.length, 'pessoa', 'pessoas')}</div>
     ${d.descricao ? `<div class="d-desc">${esc(d.descricao)}</div>` : ''}</div>
     <div class="card g"><div class="lbl">${esc(faseTxt(d, st))}</div><div class="barra" style="margin-top:10px"><div style="width:${st.fase === 'futuro' ? 0 : Math.round((st.dia / st.total) * 100)}%"></div></div>
-      <div class="acoes" style="margin-top:14px">${st.fase === 'ativo' ? `<button class="btn ${fezHoje ? '' : 'lime'}" data-a="checkin">${fezHoje ? '+ Outro check-in' : '📸 Fazer check-in'}</button>` : ''}<button class="btn" data-a="convidar-desafio" data-id="${d.id}">Convidar</button></div></div>`;
+      <div class="acoes" style="margin-top:14px">${st.fase === 'ativo' ? `<button class="btn ${fezHoje ? '' : 'lime'}" data-a="checkin">${fezHoje ? '+ Outro check-in' : '📸 Fazer check-in'}</button>` : ''}<button class="btn" data-a="convidar-desafio" data-id="${esc(d.id)}">Convidar</button></div></div>`;
 
   html += `<div class="sec"><div class="sec-h"><h3>Placar</h3><span class="tag green">${(CRITERIO[d.criterio] || CRITERIO.dias)[0]}</span></div><div class="list g">`
     + placar.map((p) => {
@@ -1166,12 +1188,12 @@ function telaDesafio() {
     const minha = c.reacoes?.[uid];
     const conta = (e) => reac.filter(([, v]) => v === e).length;
     html += `<div class="ck g">
-      <div class="ck-top">${avatarHTML(pe.foto, pe.nome)}<div class="info"><div class="t">${esc(primeiroNome(pe.nome))}</div><div class="m">${esc(C.rotuloDia(c.data))}${c.data < d.inicio || c.data > d.fim ? ' · fora do período' : ''}</div></div>${c.uid === uid ? `<button class="link" data-a="ver-checkin-d" data-d="${d.id}" data-id="${c.id}">Editar</button>` : ''}</div>
-      ${fotos.length ? `<div class="ck-imgs n${fotos.length}">${fotos.map((src, i) => `<img src="${src}" alt="" data-a="ver-img-ck" data-d="${d.id}" data-id="${c.id}" data-i="${i}">`).join('')}</div>` : c.nFotos ? '<div class="ck-imgs carregando"></div>' : ''}
+      <div class="ck-top">${avatarHTML(pe.foto, pe.nome)}<div class="info"><div class="t">${esc(primeiroNome(pe.nome))}</div><div class="m">${esc(C.rotuloDia(c.data))}${c.data < d.inicio || c.data > d.fim ? ' · fora do período' : ''}</div></div>${c.uid === uid ? `<button class="link" data-a="ver-checkin-d" data-d="${esc(d.id)}" data-id="${esc(c.id)}">Editar</button>` : ''}</div>
+      ${fotos.length ? `<div class="ck-imgs n${fotos.length}">${fotos.map((src, i) => `<img src="${imgSrc(src)}" alt="" data-a="ver-img-ck" data-d="${esc(d.id)}" data-id="${esc(c.id)}" data-i="${esc(i)}">`).join('')}</div>` : c.nFotos ? '<div class="ck-imgs carregando"></div>' : ''}
       <div class="ck-t">${t.e} ${esc(c.titulo || t.nome)}</div>
       <div class="ck-m">${resumoCheckin(c)}</div>
       ${c.nota ? `<div class="ck-nota">“${esc(c.nota)}”</div>` : ''}
-      <div class="reacoes">${['🔥', '💪', '👏', '❤️'].map((e) => `<button class="${minha === e ? 'on' : ''}" data-a="reagir-ck" data-d="${d.id}" data-id="${c.id}" data-v="${e}">${e}${conta(e) ? ` <small>${conta(e)}</small>` : ''}</button>`).join('')}</div>
+      <div class="reacoes">${['🔥', '💪', '👏', '❤️'].map((e) => `<button class="${minha === e ? 'on' : ''}" data-a="reagir-ck" data-d="${esc(d.id)}" data-id="${esc(c.id)}" data-v="${esc(e)}">${e}${conta(e) ? ` <small>${conta(e)}</small>` : ''}</button>`).join('')}</div>
     </div>`;
   }
   return html + '</div>';
@@ -1187,7 +1209,7 @@ function modalDesafio(existente = null) {
     <label>Nome</label><input name="nome" value="${esc(d.nome || '')}" placeholder="Ex.: Verão 2027 💪" required maxlength="60">
     <label>Regras / combinado <small>(opcional)</small></label><input name="descricao" value="${esc(d.descricao || '')}" placeholder="Ex.: mínimo 40 min; quem perder paga o jantar" maxlength="200">
     <div class="linha"><div><label>Começa</label><input type="date" name="inicio" value="${ini}" required></div><div><label>Termina</label><input type="date" name="fim" value="${fim}" required></div></div>
-    <div class="chips" style="margin-top:10px">${[7, 14, 30, 60, 90].map((n) => `<button type="button" class="chip" data-dur="${n}">${n} dias</button>`).join('')}</div>
+    <div class="chips" style="margin-top:10px">${[7, 14, 30, 60, 90].map((n) => `<button type="button" class="chip" data-dur="${esc(n)}">${n} dias</button>`).join('')}</div>
     <label>Quem ganha</label><div class="seg">
       <label><input type="radio" name="criterio" value="pontos" ${!d.criterio || d.criterio === 'pontos' ? 'checked' : ''}>Mais pontos</label>
       <label><input type="radio" name="criterio" value="dias" ${d.criterio === 'dias' ? 'checked' : ''}>Mais dias treinados</label>
@@ -1280,7 +1302,7 @@ function modalMenuDesafio(id) {
 }
 
 function modalFotos(fotos, extra = '') {
-  abrirModal('Foto', fotos.map((src) => `<img class="foto-grande" src="${src}" alt="">`).join('<div style="height:10px"></div>') + extra);
+  abrirModal('Foto', fotos.map((src) => `<img class="foto-grande" src="${imgSrc(src)}" alt="">`).join('<div style="height:10px"></div>') + extra);
 }
 
 // ---------- Dupla ----------
@@ -1308,12 +1330,14 @@ function cartaoParceiro(p) {
   const duo = ofensivaComParceiro(pf);
   const mapaP = mapaParceiro(pf);
   const nome = esc(primeiroNome(pf.nome));
-  const ofP = pf.ofensiva || { atual: 0 };
+  const ofP = { atual: n0(pf.ofensiva?.atual), gelo: n0(pf.ofensiva?.gelo) };
   const parHoje = mapaP[h] === 'ok';
+  // O resumo "hoje" do perfil só vale se a pessoa abriu o app hoje.
+  const progHoje = pf.atualizado === h ? Math.min(100, n0(pf.hoje?.progresso)) : 0;
 
   // Tira de 14 dias: eu em cima, a dupla embaixo
   const dias = [...C.diasEntre(C.somarDias(h, -13), h)];
-  const cel = (v) => `<i class="${v === 'semdados' ? 'pendente' : v || ''}"></i>`;
+  const cel = (v) => `<i class="${v === 'semdados' ? 'pendente' : estado(v)}"></i>`;
   const tira = `<div class="tira">${dias.map((d) => `<div>${cel(meu.mapa[d])}${cel(mapaP[d])}<span>${C.SEMANA[C.diaSemana(d)][0].toUpperCase()}</span></div>`).join('')}</div>
     <div class="tira-leg"><span>em cima: você · embaixo: ${nome}</span><span>🟩 cumprido · 🟦 congelado</span></div>`;
 
@@ -1343,22 +1367,22 @@ function cartaoParceiro(p) {
     const fotos = (o.fotos || []).filter((f) => f.data === h);
     const fotosCk = (o.checkins || []).flatMap((c) => (c.fotos || []).map((src, i) => ({ c, i, src })));
     if (fotos.length || fotosCk.length) {
-      detalhe += `<div class="fotos">${fotosCk.map((x) => `<img src="${x.src}" alt="" data-a="ver-ck-par" data-p="${p}" data-id="${x.c.id}" data-i="${x.i}">`).join('')}${fotos.map((f) => `<img src="${f.img}" alt="" data-a="ver-foto-par" data-p="${p}" data-id="${f.id}">`).join('')}</div>`;
+      detalhe += `<div class="fotos">${fotosCk.map((x) => `<img src="${imgSrc(x.src)}" alt="" data-a="ver-ck-par" data-p="${esc(p)}" data-id="${esc(x.c.id)}" data-i="${esc(x.i)}">`).join('')}${fotos.map((f) => `<img src="${imgSrc(f.img)}" alt="" data-a="ver-foto-par" data-p="${esc(p)}" data-id="${esc(f.id)}">`).join('')}</div>`;
     }
   }
   const minha = dia?.reacoes?.[uid];
-  const reacoes = ['🔥', '💪', '👏', '❤️', '🥗'].map((e) => `<button class="${minha === e ? 'on' : ''}" data-a="reagir" data-p="${p}" data-v="${e}" ${dia ? '' : 'disabled'}>${e}</button>`).join('');
+  const reacoes = ['🔥', '💪', '👏', '❤️', '🥗'].map((e) => `<button class="${minha === e ? 'on' : ''}" data-a="reagir" data-p="${esc(p)}" data-v="${esc(e)}" ${dia ? '' : 'disabled'}>${e}</button>`).join('');
 
   return `<div class="par g fade-in">
     <div class="par-top">${avatarHTML(pf.foto, pf.nome)}<div class="info"><div class="t">${esc(pf.nome)}</div>
-      <div class="m">🔥 ${plural(ofP.atual || 0, 'dia seguido', 'dias seguidos')}${ofP.gelo ? ` · ❄️ ${ofP.gelo}` : ''} · hoje ${parHoje ? 'cumprido ✓' : `${pf.hoje?.progresso ?? 0}%`}</div></div>
-      <button class="ico g" data-a="menu-par" data-p="${p}" aria-label="Opções">⋯</button></div>
+      <div class="m">🔥 ${plural(ofP.atual, 'dia seguido', 'dias seguidos')}${ofP.gelo ? ` · ❄️ ${ofP.gelo}` : ''} · hoje ${parHoje ? 'cumprido ✓' : `${progHoje}%`}</div></div>
+      <button class="ico g" data-a="menu-par" data-p="${esc(p)}" aria-label="Opções">⋯</button></div>
     <div class="duo"><div class="av2">${avatarHTML(usuario.photoURL, usuario.displayName)}${avatarHTML(pf.foto, pf.nome)}</div>
       <span class="f ${duo.hojeOk ? '' : 'off'}">🔥</span><span class="num ${duo.atual ? 'on' : ''}">${duo.atual}</span></div>
-    <div class="duo-lbl">${duo.hojeOk ? 'Vocês dois cumpriram hoje! 🎉' : `dias juntos · ${meu.hojeOk ? `falta ${nome}` : parHoje ? 'falta você' : 'falta os dois'} hoje`}${duo.recorde > duo.atual ? ` · recorde ${duo.recorde}` : ''}</div>
+    <div class="duo-lbl">${duo.hojeOk ? 'Vocês dois cumpriram hoje! 🎉' : `dias juntos · ${meu.hojeOk ? `falta ${nome}` : parHoje ? 'falta você' : 'faltam os dois'} hoje`}${duo.recorde > duo.atual ? ` · recorde ${duo.recorde}` : ''}</div>
     ${tira}
     <div class="dia-par"><h4>Hoje de ${nome}</h4>${detalhe}</div>
-    <div class="reacoes">${reacoes}<button class="cutucar" data-a="cutucar" data-p="${p}">👉 Cutucar</button></div>
+    <div class="reacoes">${reacoes}<button class="cutucar" data-a="cutucar" data-p="${esc(p)}">👉 Cutucar</button></div>
   </div>`;
 }
 
@@ -1409,7 +1433,7 @@ function telaProgresso() {
     html += '<div class="list g">' + linhas.map((x) => {
       const best = Math.max(...x.hist.map((h) => h.kg));
       const quando = x.hist.find((h) => h.kg === best).data;
-      return `<div class="row clic" data-a="ver-exercicio" data-id="${x.id}"><div class="ic" style="--c:#c6f432">🏋️</div><div class="info"><div class="t">${esc(x.nome)}</div><div class="m">${plural(x.hist.length, 'treino', 'treinos')} · recorde em ${esc(C.paraData(quando).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }))}</div></div><div class="v">${num(best)} kg</div><span class="seta">›</span></div>`;
+      return `<div class="row clic" data-a="ver-exercicio" data-id="${esc(x.id)}"><div class="ic" style="--c:#c6f432">🏋️</div><div class="info"><div class="t">${esc(x.nome)}</div><div class="m">${plural(x.hist.length, 'treino', 'treinos')} · recorde em ${esc(C.paraData(quando).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }))}</div></div><div class="v">${num(best)} kg</div><span class="seta">›</span></div>`;
     }).join('') + '</div>';
   }
   html += '</div>';
@@ -1550,18 +1574,20 @@ function modalPlano() {
     f.addEventListener('submit', (e) => {
       e.preventDefault();
       const t = C.lerTreino(f.treino.value); const d = C.lerDieta(f.dieta.value);
+      // A ofensiva começa no dia em que o primeiro plano é salvo (antes disso não havia o que cumprir).
+      if (!D.plano && D.perfil && inicio() < C.hoje()) store.substituirCampos(['perfis', uid], { inicio: C.hoje() });
       store.definir(['usuarios', uid, 'config', 'plano'], { treinoTexto: f.treino.value, dietaTexto: f.dieta.value, treinos: t.treinos, agenda: t.agenda, refeicoes: d.refeicoes, ...extras, atualizado: Date.now() }, false);
       fecharModal(); toast('Plano salvo ✓');
     });
     el.querySelector('[data-a="exemplo-plano"]')?.addEventListener('click', () => { f.treino.value = C.EXEMPLO_TREINO; f.dieta.value = C.EXEMPLO_DIETA; previa(); });
-    import('./importar.js?v=0.5').then((I) => { f.arquivo.accept = I.ACEITA; }).catch(() => {});
+    import('./importar.js?v=0.6').then((I) => { f.arquivo.accept = I.ACEITA; }).catch(() => {});
     f.arquivo.addEventListener('change', async () => {
       const arq = f.arquivo.files[0]; f.arquivo.value = '';
       if (!arq) return;
       const box = el.querySelector('#importado');
       box.className = 'aviso'; box.textContent = `Lendo ${arq.name}…`;
       try {
-        const I = await import('./importar.js?v=0.5');
+        const I = await import('./importar.js?v=0.6');
         const linhas = await I.lerArquivo(arq);
         const r = I.montarPlano(linhas);
         if (r.treino) f.treino.value = r.treino;
@@ -1586,7 +1612,7 @@ function modalPlano() {
 function modalTrocarTreino() {
   const dia = diaDoc(dataSel) || {};
   const atual = C.treinoDoDia(D.plano, dataSel, dia)?.id;
-  abrirModal('Treino do dia', `<div class="list g">${D.plano.treinos.map((t) => `<div class="row clic" data-escolher="${t.id}"><div class="info"><div class="t">${esc(t.nome)}</div><div class="m">${plural(t.exercicios.length, 'exercício', 'exercícios')}</div></div>${t.id === atual ? '<span class="tag green">atual</span>' : '<span class="seta">›</span>'}</div>`).join('')}</div>
+  abrirModal('Treino do dia', `<div class="list g">${D.plano.treinos.map((t) => `<div class="row clic" data-escolher="${esc(t.id)}"><div class="info"><div class="t">${esc(t.nome)}</div><div class="m">${plural(t.exercicios.length, 'exercício', 'exercícios')}</div></div>${t.id === atual ? '<span class="tag green">atual</span>' : '<span class="seta">›</span>'}</div>`).join('')}</div>
     ${dia.treinoId !== undefined ? '<div class="acoes"><button class="btn" data-escolher="__agenda">Voltar ao da agenda</button></div>' : ''}`, (el) => {
     el.addEventListener('click', (e) => {
       const b = e.target.closest('[data-escolher]'); if (!b) return;
@@ -1659,7 +1685,7 @@ function modalExercicio(exId) {
   const nome = (D.plano?.treinos || []).flatMap((t) => t.exercicios).find((e) => e.id === exId)?.nome || exId;
   const hist = C.historicoExercicio(D.dias, exId);
   abrirModal(nome, `${grafico(hist.map((h) => ({ x: h.data, y: h.kg })), 'kg')}
-    <div class="list g" style="margin-top:14px">${[...hist].reverse().map((h) => `<div class="row"><div class="info"><div class="t">${esc(C.rotuloDia(h.data))}</div><div class="m">${h.series.map((s) => `${num(s.kg)}×${s.reps || '?'}`).join(' · ')}</div></div><div class="v">${num(h.kg)} kg</div></div>`).join('')}</div>`);
+    <div class="list g" style="margin-top:14px">${[...hist].reverse().map((h) => `<div class="row"><div class="info"><div class="t">${esc(C.rotuloDia(h.data))}</div><div class="m">${h.series.map(fmtSerie).join(' · ')}</div></div><div class="v">${num(h.kg)} kg</div></div>`).join('')}</div>`);
 }
 
 // Foto: reduz para ~720px em JPEG para caber no Firestore (limite de 1 MB por documento).
@@ -1720,6 +1746,11 @@ function ligarEventos() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && usuario) {
       cacheOfensiva = null;
+      if (ultimoHoje !== C.hoje()) {
+        // Passou da meia-noite: volta para o dia de hoje.
+        if (dataSel === ultimoHoje) { dataSel = C.hoje(); assinarFotos(); }
+        ultimoHoje = C.hoje();
+      }
       if (parceirosAssinados) { const k = parceirosAssinados; parceirosAssinados = ''; for (const p of Object.keys(P)) { P[p].paradas.forEach((f) => f()); delete P[p]; } if (k) assinarParceiros(); }
       agendarRender();
     }
@@ -1828,7 +1859,7 @@ function aoClicar(e) {
       if (ok) {
         const t = C.treinoDoDia(D.plano, dataSel, dia);
         const exo = t?.exercicios.find((x) => x.id === ex);
-        iniciarTimer(exo?.descanso || prefs().descanso);
+        if (!/min/.test(exo?.reps || '')) iniciarTimer(exo?.descanso || prefs().descanso);
       }
       break;
     }
@@ -1855,7 +1886,7 @@ function aoClicar(e) {
       const f = a === 'ver-foto' ? D.fotos.find((x) => x.id === id) : (P[b.dataset.p]?.fotos || []).find((x) => x.id === id);
       if (!f) break;
       const meu = a === 'ver-foto' && editavel(f.data);
-      abrirModal('Foto', `<img class="foto-grande" src="${f.img}" alt="">${meu ? '<div class="acoes"><button class="btn danger" data-apagar>Apagar foto</button></div>' : ''}`, (el) => {
+      abrirModal('Foto', `<img class="foto-grande" src="${imgSrc(f.img)}" alt="">${meu ? '<div class="acoes"><button class="btn danger" data-apagar>Apagar foto</button></div>' : ''}`, (el) => {
         el.querySelector('[data-apagar]')?.addEventListener('click', () => { store.remover(['feed', uid, 'fotos', id]); D.fotos = D.fotos.filter((x) => x.id !== id); fecharModal(); });
       });
       break;

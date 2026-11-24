@@ -1,6 +1,6 @@
 // Service worker: guarda os arquivos do app para abrir rápido e offline.
 // Os dados ficam no cache offline do próprio Firestore.
-const V = '0.5';
+const V = '0.6';
 const CACHE = 'folego-' + V;
 const ARQUIVOS = ['./', 'index.html', `styles.css?v=${V}`, `app.js?v=${V}`, `store.js?v=${V}`, `calc.js?v=${V}`, 'firebase-config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
